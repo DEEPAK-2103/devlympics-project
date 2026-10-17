@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback } from 'react';
 import EyeTracker from '@/components/vision/EyeTracker';
 import RadialHUD from '@/components/hud/RadialHUD';
 import FloorBeacon from '@/components/hud/FloorBeacon';
@@ -8,11 +8,15 @@ import MeetingRoom from '@/components/meeting/MeetingRoom';
 import SettingsDrawer from '@/components/hud/SettingsDrawer';
 import MacroStudio, { PRESET_PACKS } from '@/components/studio/MacroStudio';
 import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
+import FeelTheGapSimulator from '@/components/experience/FeelTheGapSimulator';
+import CodeReviewBridge from '@/components/code/CodeReviewBridge';
+import VoiceProfileManager from '@/components/profile/VoiceProfileManager';
+import CaregiverSafeguard from '@/components/safety/CaregiverSafeguard';
 import SlackIntegrationModal from '@/components/integrations/SlackIntegrationModal';
 import VirtualAudioGuide from '@/components/integrations/VirtualAudioGuide';
 import OnboardingModal from '@/components/onboarding/OnboardingModal';
 import CalibrationModal from '@/components/vision/CalibrationModal';
-import { GazeCoords, QuadrantOption, ToneType, CalibrationMatrix } from '@/lib/types';
+import { GazeCoords, QuadrantOption, ToneType } from '@/lib/types';
 import { SpeechService } from '@/lib/audio/speechService';
 import Link from 'next/link';
 import {
@@ -34,12 +38,17 @@ import {
   Hash,
   HelpCircle,
   BarChart3,
-  Video,
+  GitPullRequest,
+  HeartPulse,
+  User,
+  Gauge,
 } from 'lucide-react';
 
 export default function SynapseFlowPage() {
   // Navigation Tabs
-  const [activeTab, setActiveTab] = useState<'cockpit' | 'macros' | 'analytics'>('cockpit');
+  const [activeTab, setActiveTab] = useState<
+    'cockpit' | 'simulator' | 'code' | 'macros' | 'identity' | 'analytics'
+  >('cockpit');
 
   // Gaze & Vision State
   const [activeQuadrant, setActiveQuadrant] = useState<number | null>(null);
@@ -62,8 +71,8 @@ export default function SynapseFlowPage() {
   );
 
   // Real-Time Analytics State
-  const [totalPhrasesSpoken, setTotalPhrasesSpoken] = useState(3);
-  const [totalWordsSpoken, setTotalWordsSpoken] = useState(48);
+  const [totalPhrasesSpoken, setTotalPhrasesSpoken] = useState(5);
+  const [totalWordsSpoken, setTotalWordsSpoken] = useState(72);
   const [abortedCount, setAbortedCount] = useState(0);
 
   // Integrations & Modals State
@@ -71,6 +80,7 @@ export default function SynapseFlowPage() {
   const [isSlackOpen, setIsSlackOpen] = useState(false);
   const [isAudioGuideOpen, setIsAudioGuideOpen] = useState(false);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
+  const [isCaregiverOpen, setIsCaregiverOpen] = useState(false);
   const [slackEnabled, setSlackEnabled] = useState(true);
   const [slackChannel, setSlackChannel] = useState('#engineering-standup');
   const [slackWebhookUrl, setSlackWebhookUrl] = useState('');
@@ -209,48 +219,66 @@ export default function SynapseFlowPage() {
               <div className="flex items-center gap-2">
                 <span className="font-bold text-base tracking-tight text-white">SynapseFlow</span>
                 <span className="text-[10px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 px-2 py-0.5 rounded-full">
-                  Startup Edition
+                  Enterprise Bridge
                 </span>
               </div>
-              <p className="text-[11px] text-neutral-400">Bi-Directional Assistive Collaboration Bridge</p>
+              <p className="text-[11px] text-neutral-400">Bi-Directional Assistive Collaboration Suite</p>
             </div>
           </div>
 
           {/* Navigation Tabs */}
-          <nav className="hidden md:flex items-center gap-1 bg-neutral-900/90 border border-neutral-800 rounded-xl p-1 text-xs">
+          <nav className="hidden lg:flex items-center gap-1 bg-neutral-900/90 border border-neutral-800 rounded-xl p-1 text-xs">
             <button
               onClick={() => setActiveTab('cockpit')}
               className={`px-3 py-1.5 rounded-lg font-medium transition ${
-                activeTab === 'cockpit'
-                  ? 'bg-cyan-600 text-white shadow-sm'
-                  : 'text-neutral-400 hover:text-white'
+                activeTab === 'cockpit' ? 'bg-cyan-600 text-white shadow-sm' : 'text-neutral-400 hover:text-white'
               }`}
             >
-              Collaboration Cockpit
+              Cockpit
+            </button>
+            <button
+              onClick={() => setActiveTab('simulator')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 ${
+                activeTab === 'simulator' ? 'bg-cyan-600 text-white shadow-sm' : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <Gauge className="w-3.5 h-3.5" /> Benchmark Simulator
+            </button>
+            <button
+              onClick={() => setActiveTab('code')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 ${
+                activeTab === 'code' ? 'bg-cyan-600 text-white shadow-sm' : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <GitPullRequest className="w-3.5 h-3.5" /> Code Review Bridge
             </button>
             <button
               onClick={() => setActiveTab('macros')}
               className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 ${
-                activeTab === 'macros'
-                  ? 'bg-cyan-600 text-white shadow-sm'
-                  : 'text-neutral-400 hover:text-white'
+                activeTab === 'macros' ? 'bg-cyan-600 text-white shadow-sm' : 'text-neutral-400 hover:text-white'
               }`}
             >
               <Layers className="w-3.5 h-3.5" /> Macro Studio
             </button>
             <button
-              onClick={() => setActiveTab('analytics')}
+              onClick={() => setActiveTab('identity')}
               className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 ${
-                activeTab === 'analytics'
-                  ? 'bg-cyan-600 text-white shadow-sm'
-                  : 'text-neutral-400 hover:text-white'
+                activeTab === 'identity' ? 'bg-cyan-600 text-white shadow-sm' : 'text-neutral-400 hover:text-white'
               }`}
             >
-              <BarChart3 className="w-3.5 h-3.5" /> Clinical Analytics
+              <User className="w-3.5 h-3.5" /> Voice & Persona
+            </button>
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 ${
+                activeTab === 'analytics' ? 'bg-cyan-600 text-white shadow-sm' : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" /> Analytics
             </button>
           </nav>
 
-          {/* Header Action Tools */}
+          {/* Action Toolbar */}
           <div className="flex items-center gap-2">
             {/* Pop-Out Floating Window */}
             <button
@@ -260,6 +288,15 @@ export default function SynapseFlowPage() {
             >
               <ExternalLink className="w-3.5 h-3.5 text-cyan-400" />
               <span className="hidden sm:inline">Floating HUD</span>
+            </button>
+
+            {/* Caregiver Safeguard */}
+            <button
+              onClick={() => setIsCaregiverOpen(true)}
+              className="p-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-red-400 hover:text-red-300 transition"
+              title="Caregiver Distress & Ergonomic Break Safeguard"
+            >
+              <HeartPulse className="w-4 h-4" />
             </button>
 
             {/* Slack Integration */}
@@ -340,7 +377,29 @@ export default function SynapseFlowPage() {
         </div>
       </section>
 
-      {/* Hero Headline & Problem-to-Bridge Mapping */}
+      {/* Mobile/Responsive Tabs */}
+      <div className="flex lg:hidden overflow-x-auto gap-1 p-2 bg-neutral-900 border-b border-neutral-800 text-xs">
+        {[
+          { key: 'cockpit', label: 'Cockpit' },
+          { key: 'simulator', label: 'Benchmark Simulator' },
+          { key: 'code', label: 'Code Review' },
+          { key: 'macros', label: 'Macro Studio' },
+          { key: 'identity', label: 'Persona' },
+          { key: 'analytics', label: 'Analytics' },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key as any)}
+            className={`px-3 py-1.5 rounded-lg whitespace-nowrap font-medium transition ${
+              activeTab === tab.key ? 'bg-cyan-600 text-white' : 'text-neutral-400'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Hero Problem-to-Bridge Headline */}
       <section className="px-4 sm:px-6 pt-5 pb-3 max-w-7xl mx-auto w-full">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
@@ -352,7 +411,7 @@ export default function SynapseFlowPage() {
               Connecting Sparse Micro-Gazes to Real-Time Spoken Dialogue
             </h1>
             <p className="text-neutral-400 text-xs sm:text-sm mt-1 max-w-2xl">
-              Zero-hardware assistive software converting 350ms iris fixations into context-aware, fluent spoken
+              Zero-hardware assistive software suite converting 350ms iris fixations into context-aware, fluent spoken
               sentences with floor reservation in under 1 second.
             </p>
           </div>
@@ -363,7 +422,7 @@ export default function SynapseFlowPage() {
               <p className="text-xs font-bold text-neutral-200 flex items-center gap-1.5">
                 <MousePointer className="w-3.5 h-3.5 text-cyan-400" /> Test with Mouse Cursor
               </p>
-              <p className="text-[11px] text-neutral-400">Simulate gaze without webcam</p>
+              <p className="text-[11px] text-neutral-400">Simulate eye movement without webcam</p>
             </div>
             <button
               onClick={() => setIsSimulatingMouse(!isSimulatingMouse)}
@@ -466,7 +525,21 @@ export default function SynapseFlowPage() {
           </div>
         )}
 
-        {/* TAB 2: MACRO STUDIO */}
+        {/* TAB 2: FEEL THE GAP SIMULATOR */}
+        {activeTab === 'simulator' && <FeelTheGapSimulator />}
+
+        {/* TAB 3: CODE REVIEW BRIDGE */}
+        {activeTab === 'code' && (
+          <CodeReviewBridge
+            onLoadPRCardsToHUD={(newOptions) => {
+              setOptions(newOptions);
+              setActiveTab('cockpit');
+            }}
+            tone={tone}
+          />
+        )}
+
+        {/* TAB 4: MACRO STUDIO */}
         {activeTab === 'macros' && (
           <MacroStudio
             activeOptions={options}
@@ -474,7 +547,12 @@ export default function SynapseFlowPage() {
           />
         )}
 
-        {/* TAB 3: ANALYTICS */}
+        {/* TAB 5: VOICE & PERSONA IDENTITY */}
+        {activeTab === 'identity' && (
+          <VoiceProfileManager tone={tone} onToneChange={setTone} />
+        )}
+
+        {/* TAB 6: ANALYTICS */}
         {activeTab === 'analytics' && (
           <AnalyticsDashboard
             totalPhrasesSpoken={totalPhrasesSpoken}
@@ -574,6 +652,11 @@ export default function SynapseFlowPage() {
         webhookUrl={slackWebhookUrl}
         onWebhookUrlChange={setSlackWebhookUrl}
         lastDispatchedMessage={lastSlackDispatched}
+      />
+
+      <CaregiverSafeguard
+        isOpen={isCaregiverOpen}
+        onClose={() => setIsCaregiverOpen(false)}
       />
 
       <VirtualAudioGuide
