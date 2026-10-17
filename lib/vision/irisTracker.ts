@@ -1,5 +1,6 @@
 // Robust Eye Aspect Ratio (EAR) & Iris Tracking with Adaptive EMA Filter
 import { GazeCoords, CalibrationMatrix } from '../types';
+import { OneEuroFilter2D } from './oneEuroFilter';
 
 interface Point3D {
   x: number;
@@ -16,6 +17,7 @@ export class IrisGazeEngine {
   private prevY = 0;
   private blinkStartTime: number | null = null;
   private isCurrentlyBlinking = false;
+  private oneEuro = new OneEuroFilter2D(1.2, 0.009, 1.0);
   private calibration: CalibrationMatrix = {
     isCalibrated: false,
     centerX: 0.5,
@@ -155,14 +157,11 @@ export class IrisGazeEngine {
       normY = Math.max(-1, Math.min(1, (raw.y - defaultCenterY) / (defaultSpan * 0.8)));
     }
 
-    // Dynamic Exponential Moving Average (EMA)
-    // Fast movement (saccade) -> alpha ~ 0.45 for rapid tracking
-    // Slow movement (fixation) -> alpha ~ 0.15 for rock-solid stability
-    const saccadeVelocity = Math.sqrt((normX - this.prevX) ** 2 + (normY - this.prevY) ** 2);
-    const alpha = saccadeVelocity > 0.4 ? 0.45 : 0.18;
-
-    const smoothX = alpha * normX + (1 - alpha) * this.prevX;
-    const smoothY = alpha * normY + (1 - alpha) * this.prevY;
+    // 1€ Filter (One Euro Filter) combined with velocity-aware smoothing
+    // Eliminates micro-nystagmus and jitter during fixation with zero lag during saccades
+    const filtered = this.oneEuro.filter(normX, normY, now);
+    const smoothX = filtered.x;
+    const smoothY = filtered.y;
 
     this.prevX = smoothX;
     this.prevY = smoothY;

@@ -187,15 +187,58 @@ export default function SynapseFlowPage() {
     [tone, lastMeetingDialogue, slackEnabled, slackChannel, slackWebhookUrl]
   );
 
-  // Open Pop-out Floating HUD in separate mini-window
-  const handleOpenFloatingWindow = () => {
-    if (typeof window !== 'undefined') {
-      window.open(
-        '/hud',
-        'SynapseFlowFloatingHUD',
-        'width=480,height=620,resizable=yes,scrollbars=no,status=no'
-      );
+  // Open Pop-out Floating HUD in native Always-On-Top Picture-in-Picture or pop-out window
+  const handleOpenFloatingWindow = async () => {
+    if (typeof window === 'undefined') return;
+
+    // Check for Chromium Document Picture-in-Picture API (True Always-On-Top OS Window)
+    if ('documentPictureInPicture' in window) {
+      try {
+        const pipWin = await (window as any).documentPictureInPicture.requestWindow({
+          width: 460,
+          height: 600,
+        });
+
+        // Copy styles into pip window
+        [...document.styleSheets].forEach((styleSheet) => {
+          try {
+            const cssRules = [...styleSheet.cssRules].map((rule) => rule.cssText).join('');
+            const style = pipWin.document.createElement('style');
+            style.textContent = cssRules;
+            pipWin.document.head.appendChild(style);
+          } catch (e) {
+            const link = pipWin.document.createElement('link');
+            if (styleSheet.href) {
+              link.rel = 'stylesheet';
+              link.type = styleSheet.type;
+              link.media = styleSheet.media.toString();
+              link.href = styleSheet.href;
+              pipWin.document.head.appendChild(link);
+            }
+          }
+        });
+
+        // Inject iframe pointing to /hud
+        const iframe = pipWin.document.createElement('iframe');
+        iframe.src = '/hud';
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        iframe.style.border = 'none';
+        iframe.style.background = '#0a0a0a';
+        pipWin.document.body.style.margin = '0';
+        pipWin.document.body.appendChild(iframe);
+        return;
+      } catch (pipErr) {
+        console.warn('Native PiP window requested fallback to standard popup:', pipErr);
+      }
     }
+
+    // Standard floating window fallback
+    window.open(
+      '/hud',
+      'SynapseFlowFloatingHUD',
+      'width=480,height=620,resizable=yes,scrollbars=no,status=no'
+    );
   };
 
   return (

@@ -101,12 +101,74 @@ export default function MeetingRoom({
     }
   }, [userSpeakingText, isUserSpeaking]);
 
+  const audioCanvasRef = useRef<HTMLCanvasElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+
+  // Audio FFT Spectrum Loop
+  const startAudioSpectrum = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioStreamRef.current = stream;
+
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioContextClass();
+      audioContextRef.current = ctx;
+
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 64;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      const canvas = audioCanvasRef.current;
+      if (!canvas) return;
+      const canvasCtx = canvas.getContext('2d');
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      const draw = () => {
+        if (!canvasCtx || !analyserRef.current) return;
+        animFrameRef.current = requestAnimationFrame(draw);
+        analyserRef.current.getByteFrequencyData(dataArray);
+
+        canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+        const barWidth = (canvas.width / bufferLength) * 1.5;
+        let x = 0;
+
+        for (let i = 0; i < bufferLength; i++) {
+          const barHeight = (dataArray[i] / 255) * canvas.height;
+          canvasCtx.fillStyle = '#06b6d4';
+          canvasCtx.fillRect(x, canvas.height - barHeight, barWidth - 1, barHeight);
+          x += barWidth;
+        }
+      };
+
+      draw();
+    } catch (e) {
+      console.warn('Audio spectrum capture notice:', e);
+    }
+  };
+
+  const stopAudioSpectrum = () => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((t) => t.stop());
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+    }
+  };
+
   // Real-Time Microphone Listener (Side B -> Side A)
   const toggleMicListening = () => {
     if (isMicListening) {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
+      stopAudioSpectrum();
       setIsMicListening(false);
       return;
     }
@@ -129,6 +191,7 @@ export default function MeetingRoom({
 
       recognition.onstart = () => {
         setIsMicListening(true);
+        startAudioSpectrum();
       };
 
       recognition.onresult = (event: any) => {
@@ -223,8 +286,18 @@ export default function MeetingRoom({
           </div>
         </div>
 
-        {/* Live Mic Listener Button (Side B -> Side A) */}
+        {/* Live Mic Listener Button & Real-Time FFT Audio Visualizer */}
         <div className="flex items-center gap-2">
+          {isMicListening && (
+            <canvas
+              ref={audioCanvasRef}
+              width={80}
+              height={26}
+              className="rounded-lg bg-neutral-950 border border-neutral-700/80 shadow-inner"
+              title="Real-Time Web Audio FFT Spectrum"
+            />
+          )}
+
           <button
             onClick={toggleMicListening}
             className={`py-1.5 px-3 rounded-xl text-xs font-semibold flex items-center gap-2 transition ${
@@ -235,7 +308,7 @@ export default function MeetingRoom({
             title="Listen to real ambient microphone audio and distill into HUD glance cards"
           >
             {isMicListening ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5 text-neutral-400" />}
-            <span>{isMicListening ? 'Listening to Room...' : 'Listen via Mic'}</span>
+            <span>{isMicListening ? 'Listening...' : 'Listen via Mic'}</span>
           </button>
         </div>
       </div>
