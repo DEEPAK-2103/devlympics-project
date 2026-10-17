@@ -6,8 +6,15 @@ import RadialHUD from '@/components/hud/RadialHUD';
 import FloorBeacon from '@/components/hud/FloorBeacon';
 import MeetingRoom from '@/components/meeting/MeetingRoom';
 import SettingsDrawer from '@/components/hud/SettingsDrawer';
-import { GazeCoords, QuadrantOption, ToneType } from '@/lib/types';
+import MacroStudio, { PRESET_PACKS } from '@/components/studio/MacroStudio';
+import AnalyticsDashboard from '@/components/analytics/AnalyticsDashboard';
+import SlackIntegrationModal from '@/components/integrations/SlackIntegrationModal';
+import VirtualAudioGuide from '@/components/integrations/VirtualAudioGuide';
+import OnboardingModal from '@/components/onboarding/OnboardingModal';
+import CalibrationModal from '@/components/vision/CalibrationModal';
+import { GazeCoords, QuadrantOption, ToneType, CalibrationMatrix } from '@/lib/types';
 import { SpeechService } from '@/lib/audio/speechService';
+import Link from 'next/link';
 import {
   Sparkles,
   Eye,
@@ -23,62 +30,57 @@ import {
   Cpu,
   MonitorCheck,
   MousePointer,
+  ExternalLink,
+  Hash,
+  HelpCircle,
+  BarChart3,
+  Video,
 } from 'lucide-react';
 
-const INITIAL_HUD_OPTIONS: QuadrantOption[] = [
-  {
-    id: 'opt-0',
-    quadrant: 0,
-    title: 'Approve PR #412',
-    shortLabel: 'Approve',
-    category: 'action',
-    intentToken: 'Approve auth middleware PR with verified benchmarks',
-    previewText: "I've reviewed the implementation and verified the benchmarks; ready to merge.",
-  },
-  {
-    id: 'opt-1',
-    quadrant: 1,
-    title: 'On Track for Staging',
-    shortLabel: 'On Track',
-    category: 'status',
-    intentToken: 'Status is green for staging deployment today',
-    previewText: 'Our sprint deliverables remain on track for today’s staging deployment.',
-  },
-  {
-    id: 'opt-2',
-    quadrant: 2,
-    title: 'Agreed, Let’s Roll',
-    shortLabel: 'Agree',
-    category: 'conversational',
-    intentToken: 'Concur with technical direction',
-    previewText: 'I fully concur with this strategy and suggest we proceed with rollout.',
-  },
-  {
-    id: 'opt-3',
-    quadrant: 3,
-    title: 'Need Clarification',
-    shortLabel: 'Clarify',
-    category: 'contextual',
-    intentToken: 'Flagged token expiration edge case in auth middleware',
-    previewText: 'I noticed an unhandled token expiration edge case; let’s address that first.',
-  },
-];
-
 export default function SynapseFlowPage() {
+  // Navigation Tabs
+  const [activeTab, setActiveTab] = useState<'cockpit' | 'macros' | 'analytics'>('cockpit');
+
+  // Gaze & Vision State
   const [activeQuadrant, setActiveQuadrant] = useState<number | null>(null);
   const [gazeCoords, setGazeCoords] = useState<GazeCoords | null>(null);
   const [isProlongedBlink, setIsProlongedBlink] = useState(false);
+  const [isSimulatingMouse, setIsSimulatingMouse] = useState(false);
+  const [calibrationModalOpen, setCalibrationModalOpen] = useState(false);
+
+  // Audio & Meeting State
   const [isFloorReserved, setIsFloorReserved] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [currentSpeakingText, setCurrentSpeakingText] = useState('');
   const [tone, setTone] = useState<ToneType>('professional');
   const [dwellTimeMs, setDwellTimeMs] = useState(350);
-  const [isSimulatingMouse, setIsSimulatingMouse] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [options, setOptions] = useState<QuadrantOption[]>(INITIAL_HUD_OPTIONS);
+
+  // Options & Meeting Context
+  const [options, setOptions] = useState<QuadrantOption[]>(PRESET_PACKS[0].options);
   const [lastMeetingDialogue, setLastMeetingDialogue] = useState(
     'Alex, how are we looking on the auth middleware and rate limiting PR?'
   );
+
+  // Real-Time Analytics State
+  const [totalPhrasesSpoken, setTotalPhrasesSpoken] = useState(3);
+  const [totalWordsSpoken, setTotalWordsSpoken] = useState(48);
+  const [abortedCount, setAbortedCount] = useState(0);
+
+  // Integrations & Modals State
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSlackOpen, setIsSlackOpen] = useState(false);
+  const [isAudioGuideOpen, setIsAudioGuideOpen] = useState(false);
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
+  const [slackEnabled, setSlackEnabled] = useState(true);
+  const [slackChannel, setSlackChannel] = useState('#engineering-standup');
+  const [slackWebhookUrl, setSlackWebhookUrl] = useState('');
+  const [lastSlackDispatched, setLastSlackDispatched] = useState('');
+
+  // Handle Aborted Eye-Closure
+  const handleProlongedBlink = useCallback(() => {
+    setIsProlongedBlink(true);
+    setAbortedCount((c) => c + 1);
+  }, []);
 
   // Inbound Bridge: When meeting speech arrives, distill into 4 new response cards
   const handleTranscriptUpdate = useCallback(
@@ -110,21 +112,18 @@ export default function SynapseFlowPage() {
     (coords: GazeCoords, quadrant: 0 | 1 | 2 | 3 | null) => {
       setGazeCoords(coords);
       setActiveQuadrant(quadrant);
-      if (coords.isProlongedBlink) {
-        setIsProlongedBlink(true);
-      } else {
-        setIsProlongedBlink(false);
-      }
+      setIsProlongedBlink(coords.isProlongedBlink);
     },
     []
   );
 
-  // Outbound Bridge: When user dwells on a card, expand intent & speak aloud
+  // Outbound Bridge: When user dwells on a card, expand intent, speak aloud & broadcast to Slack
   const handleSelectOption = useCallback(
     async (option: QuadrantOption) => {
       setIsFloorReserved(false);
       setIsSpeaking(true);
-      setCurrentSpeakingText(option.previewText || option.intentToken);
+      const previewFallback = option.previewText || option.intentToken;
+      setCurrentSpeakingText(previewFallback);
 
       try {
         const res = await fetch('/api/expand-intent', {
@@ -140,26 +139,54 @@ export default function SynapseFlowPage() {
         });
 
         const data = await res.json();
-        const speechOutput = data.expandedSpeech || option.previewText || option.intentToken;
+        const speechOutput = data.expandedSpeech || previewFallback;
 
         setCurrentSpeakingText(speechOutput);
+        setTotalPhrasesSpoken((c) => c + 1);
+        setTotalWordsSpoken((w) => w + speechOutput.split(' ').length);
 
         // Speak aloud via TTS
         SpeechService.speakText(speechOutput, tone, () => {
           setIsSpeaking(false);
           setCurrentSpeakingText('');
         });
+
+        // Broadcast to Slack if enabled
+        if (slackEnabled) {
+          setLastSlackDispatched(speechOutput);
+          fetch('/api/slack-broadcast', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: speechOutput,
+              channel: slackChannel,
+              webhookUrl: slackWebhookUrl,
+              userName: 'Alex Rivera',
+              tone,
+            }),
+          }).catch((err) => console.warn('Slack broadcast background notice:', err));
+        }
       } catch (err) {
         console.error('Failed to expand intent:', err);
-        const fallbackText = option.previewText || option.intentToken;
-        SpeechService.speakText(fallbackText, tone, () => {
+        SpeechService.speakText(previewFallback, tone, () => {
           setIsSpeaking(false);
           setCurrentSpeakingText('');
         });
       }
     },
-    [tone, lastMeetingDialogue]
+    [tone, lastMeetingDialogue, slackEnabled, slackChannel, slackWebhookUrl]
   );
+
+  // Open Pop-out Floating HUD in separate mini-window
+  const handleOpenFloatingWindow = () => {
+    if (typeof window !== 'undefined') {
+      window.open(
+        '/hud',
+        'SynapseFlowFloatingHUD',
+        'width=480,height=620,resizable=yes,scrollbars=no,status=no'
+      );
+    }
+  };
 
   return (
     <main className="min-h-screen flex flex-col bg-neutral-950 text-neutral-100 selection:bg-cyan-500 selection:text-black">
@@ -171,7 +198,7 @@ export default function SynapseFlowPage() {
         userName="Alex Rivera"
       />
 
-      {/* Top Navigation Bar */}
+      {/* Top Header / Startup Navigation */}
       <header className="border-b border-neutral-800/80 bg-neutral-950/80 backdrop-blur-md sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -182,29 +209,98 @@ export default function SynapseFlowPage() {
               <div className="flex items-center gap-2">
                 <span className="font-bold text-base tracking-tight text-white">SynapseFlow</span>
                 <span className="text-[10px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 px-2 py-0.5 rounded-full">
-                  v2.0 HUD
+                  Startup Edition
                 </span>
               </div>
               <p className="text-[11px] text-neutral-400">Bi-Directional Assistive Collaboration Bridge</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            {/* Devlympics Shunya 2026 Tag */}
-            <div className="hidden sm:flex items-center gap-2 bg-neutral-900 border border-neutral-800 px-3 py-1 rounded-full text-xs text-neutral-300">
-              <Award className="w-3.5 h-3.5 text-amber-400" />
-              <span>Devlympics – Shunya 2026</span>
-              <span className="text-neutral-600">|</span>
-              <span className="text-cyan-400 font-medium">Bridge the Gap</span>
-            </div>
+          {/* Navigation Tabs */}
+          <nav className="hidden md:flex items-center gap-1 bg-neutral-900/90 border border-neutral-800 rounded-xl p-1 text-xs">
+            <button
+              onClick={() => setActiveTab('cockpit')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition ${
+                activeTab === 'cockpit'
+                  ? 'bg-cyan-600 text-white shadow-sm'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              Collaboration Cockpit
+            </button>
+            <button
+              onClick={() => setActiveTab('macros')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 ${
+                activeTab === 'macros'
+                  ? 'bg-cyan-600 text-white shadow-sm'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" /> Macro Studio
+            </button>
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 ${
+                activeTab === 'analytics'
+                  ? 'bg-cyan-600 text-white shadow-sm'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" /> Clinical Analytics
+            </button>
+          </nav>
 
-            {/* Quick Settings Drawer Trigger */}
+          {/* Header Action Tools */}
+          <div className="flex items-center gap-2">
+            {/* Pop-Out Floating Window */}
+            <button
+              onClick={handleOpenFloatingWindow}
+              className="py-1.5 px-3 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 hover:text-cyan-300 flex items-center gap-1.5 text-xs font-semibold transition"
+              title="Open floating HUD overlay window to use over Google Meet, Zoom, or VS Code"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="hidden sm:inline">Floating HUD</span>
+            </button>
+
+            {/* Slack Integration */}
+            <button
+              onClick={() => setIsSlackOpen(true)}
+              className={`py-1.5 px-2.5 rounded-xl border text-xs font-semibold transition flex items-center gap-1.5 ${
+                slackEnabled
+                  ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                  : 'bg-neutral-900 border-neutral-800 text-neutral-400'
+              }`}
+              title="Slack Channel Bridge Settings"
+            >
+              <Hash className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Slack</span>
+            </button>
+
+            {/* Virtual Audio Routing Guide */}
+            <button
+              onClick={() => setIsAudioGuideOpen(true)}
+              className="p-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-white transition"
+              title="How to route audio into Google Meet or Zoom"
+            >
+              <Volume2 className="w-4 h-4 text-purple-400" />
+            </button>
+
+            {/* Help / Onboarding Guide */}
+            <button
+              onClick={() => setIsOnboardingOpen(true)}
+              className="p-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-white transition"
+              title="Product Onboarding & Practice Guide"
+            >
+              <HelpCircle className="w-4 h-4 text-cyan-400" />
+            </button>
+
+            {/* Settings Drawer */}
             <button
               onClick={() => setIsSettingsOpen(true)}
-              className="py-1.5 px-3 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 hover:text-white flex items-center gap-1.5 text-xs font-semibold transition"
+              className="p-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-white transition"
+              title="Ergonomic Settings"
             >
-              <Sliders className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Settings</span>
+              <Sliders className="w-4 h-4 text-neutral-300" />
             </button>
           </div>
         </div>
@@ -221,17 +317,22 @@ export default function SynapseFlowPage() {
             <span className="hidden md:inline text-neutral-700">•</span>
             <span className="hidden md:flex items-center gap-1.5 text-neutral-300 font-medium">
               <Cpu className="w-3.5 h-3.5 text-cyan-400" />
-              Effective Bandwidth: <strong className="text-cyan-400 font-mono">120+ WPM</strong>
+              Effective Bandwidth: <strong className="text-cyan-400 font-mono">130+ WPM</strong>
             </span>
             <span className="hidden md:inline text-neutral-700">•</span>
             <span className="hidden md:flex items-center gap-1.5 text-neutral-300 font-medium">
               <MonitorCheck className="w-3.5 h-3.5 text-purple-400" />
-              Hardware Cost: <strong className="text-purple-400 font-mono">$0 (Standard Webcam)</strong>
+              Hardware Barrier: <strong className="text-purple-400 font-mono">$0 (Standard Webcam)</strong>
+            </span>
+            <span className="hidden lg:inline text-neutral-700">•</span>
+            <span className="hidden lg:flex items-center gap-1.5 text-neutral-300 font-medium">
+              <Hash className="w-3.5 h-3.5 text-emerald-400" />
+              Slack Channel: <strong className="text-emerald-400 font-mono">{slackChannel}</strong>
             </span>
           </div>
 
           <div className="flex items-center gap-2 text-[11px]">
-            <span className="text-neutral-400">Conversational Persona:</span>
+            <span className="text-neutral-400">Tone Persona:</span>
             <span className="font-bold uppercase tracking-wider text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800/50">
               {tone}
             </span>
@@ -239,20 +340,20 @@ export default function SynapseFlowPage() {
         </div>
       </section>
 
-      {/* Hero Problem-to-Bridge Headline */}
-      <section className="px-4 sm:px-6 pt-6 pb-4 max-w-7xl mx-auto w-full">
+      {/* Hero Headline & Problem-to-Bridge Mapping */}
+      <section className="px-4 sm:px-6 pt-5 pb-3 max-w-7xl mx-auto w-full">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs font-semibold mb-2">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>Zero-Hardware Assistive AI for High-Paced Agile Teams</span>
+              <span>Devlympics – Shunya 2026 Submission • Theme: Bridge the Gap</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
               Connecting Sparse Micro-Gazes to Real-Time Spoken Dialogue
             </h1>
             <p className="text-neutral-400 text-xs sm:text-sm mt-1 max-w-2xl">
-              Existing gaze keyboards force non-verbal engineers to spell letter-by-letter at 8 WPM. SynapseFlow
-              transforms 350ms iris fixations into context-aware, fluent spoken sentences in under 1 second.
+              Zero-hardware assistive software converting 350ms iris fixations into context-aware, fluent spoken
+              sentences with floor reservation in under 1 second.
             </p>
           </div>
 
@@ -262,7 +363,7 @@ export default function SynapseFlowPage() {
               <p className="text-xs font-bold text-neutral-200 flex items-center gap-1.5">
                 <MousePointer className="w-3.5 h-3.5 text-cyan-400" /> Test with Mouse Cursor
               </p>
-              <p className="text-[11px] text-neutral-400">Simulate eye movement without webcam</p>
+              <p className="text-[11px] text-neutral-400">Simulate gaze without webcam</p>
             </div>
             <button
               onClick={() => setIsSimulatingMouse(!isSimulatingMouse)}
@@ -278,90 +379,111 @@ export default function SynapseFlowPage() {
         </div>
       </section>
 
-      {/* Main Interactive Cockpit (Split View) */}
-      <section className="px-4 sm:px-6 py-4 max-w-7xl mx-auto w-full flex-1">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left Column: Vision Engine + Radial HUD Cockpit (Side A) */}
-          <div className="lg:col-span-6 flex flex-col gap-6">
-            <div className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-4 shadow-xl">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Eye className="w-4 h-4 text-cyan-400" />
-                  <h2 className="text-sm font-bold text-white">Side A: Cognitive Gaze Cockpit</h2>
+      {/* Main Content Area based on active tab */}
+      <div className="px-4 sm:px-6 py-4 max-w-7xl mx-auto w-full flex-1">
+        {/* TAB 1: COCKPIT */}
+        {activeTab === 'cockpit' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* Left Column: Vision Engine + Radial HUD Cockpit (Side A) */}
+            <div className="lg:col-span-6 flex flex-col gap-6">
+              <div className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-4 shadow-xl">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Eye className="w-4 h-4 text-cyan-400" />
+                    <h2 className="text-sm font-bold text-white">Side A: Cognitive Gaze Cockpit</h2>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-neutral-400">
+                    <span>Dwell:</span>
+                    <strong className="text-cyan-400 font-mono">{dwellTimeMs}ms</strong>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 text-[11px] text-neutral-400">
-                  <span>Dwell Time:</span>
-                  <strong className="text-cyan-400 font-mono">{dwellTimeMs}ms</strong>
-                </div>
-              </div>
 
-              {/* Top: Eye Tracking Camera & Landmark Mesh */}
-              <div className="mb-4">
-                <EyeTracker
-                  onGazeUpdate={handleGazeUpdate}
-                  onProlongedBlink={() => setIsProlongedBlink(true)}
-                  isSimulatingMouse={isSimulatingMouse}
-                  onToggleMouseSimulation={() => setIsSimulatingMouse(!isSimulatingMouse)}
-                />
-              </div>
-
-              {/* Center: The Radial HUD */}
-              <div className="flex flex-col items-center justify-center p-2 bg-neutral-950/80 rounded-2xl border border-neutral-800/80 relative overflow-hidden">
-                <div className="absolute top-2 left-3 text-[10px] text-neutral-500 font-mono uppercase tracking-widest">
-                  Fitts's Law 4-Sector Polar HUD
-                </div>
-                <div className="py-2">
-                  <RadialHUD
-                    options={options}
-                    activeQuadrant={activeQuadrant}
-                    tone={tone}
-                    onToneChange={setTone}
-                    onSelectOption={handleSelectOption}
-                    onFloorReserveChange={setIsFloorReserved}
-                    dwellDurationMs={dwellTimeMs}
-                    isProlongedBlink={isProlongedBlink}
+                {/* Eye Tracking Camera & Landmark Mesh */}
+                <div className="mb-4">
+                  <EyeTracker
+                    onGazeUpdate={handleGazeUpdate}
+                    onProlongedBlink={handleProlongedBlink}
+                    isSimulatingMouse={isSimulatingMouse}
+                    onToggleMouseSimulation={() => setIsSimulatingMouse(!isSimulatingMouse)}
                   />
                 </div>
 
-                {/* Instructions Bar */}
-                <div className="w-full mt-2 pt-2 border-t border-neutral-800 flex items-center justify-between text-[11px] text-neutral-400 px-2">
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-cyan-400"></span> Look at any quadrant for 350ms to speak
+                {/* Center Radial HUD */}
+                <div className="flex flex-col items-center justify-center p-2 bg-neutral-950/80 rounded-2xl border border-neutral-800/80 relative overflow-hidden">
+                  <div className="absolute top-2 left-3 text-[10px] text-neutral-500 font-mono uppercase tracking-widest">
+                    Fitts's Law 4-Quadrant Polar HUD
+                  </div>
+                  <div className="py-2">
+                    <RadialHUD
+                      options={options}
+                      activeQuadrant={activeQuadrant}
+                      tone={tone}
+                      onToneChange={setTone}
+                      onSelectOption={handleSelectOption}
+                      onFloorReserveChange={setIsFloorReserved}
+                      dwellDurationMs={dwellTimeMs}
+                      isProlongedBlink={isProlongedBlink}
+                    />
+                  </div>
+
+                  {/* Ergonomic Instructions Bar */}
+                  <div className="w-full mt-2 pt-2 border-t border-neutral-800 flex items-center justify-between text-[11px] text-neutral-400 px-2">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-cyan-400"></span> Look at quadrant for 350ms to speak
+                    </span>
+                    <span className="flex items-center gap-1.5 text-neutral-500">
+                      <ShieldAlert className="w-3.5 h-3.5 text-red-400" /> Close eyes &gt;800ms to abort
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Column: Live Collaboration Stage & Video Meeting (Side B) */}
+            <div className="lg:col-span-6 flex flex-col gap-6">
+              <div className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-4 shadow-xl flex-1 flex flex-col">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Volume2 className="w-4 h-4 text-emerald-400" />
+                    <h2 className="text-sm font-bold text-white">Side B: Live Meeting Collaboration Stage</h2>
+                  </div>
+                  <span className="text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                    Bi-Directional Connected
                   </span>
-                  <span className="flex items-center gap-1.5 text-neutral-500">
-                    <ShieldAlert className="w-3.5 h-3.5 text-red-400" /> Close eyes &gt;800ms to abort
-                  </span>
+                </div>
+
+                {/* Simulated Google Meet / Zoom Conference */}
+                <div className="flex-1">
+                  <MeetingRoom
+                    onTranscriptUpdate={handleTranscriptUpdate}
+                    userSpeakingText={currentSpeakingText}
+                    isUserSpeaking={isSpeaking}
+                    activeFloorUser={isFloorReserved ? 'Alex Rivera' : undefined}
+                  />
                 </div>
               </div>
             </div>
           </div>
+        )}
 
-          {/* Right Column: Live Collaboration Stage & Video Meeting (Side B) */}
-          <div className="lg:col-span-6 flex flex-col gap-6">
-            <div className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-4 shadow-xl flex-1 flex flex-col">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Volume2 className="w-4 h-4 text-emerald-400" />
-                  <h2 className="text-sm font-bold text-white">Side B: Live Meeting Collaboration Stage</h2>
-                </div>
-                <span className="text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                  Bi-Directional Connected
-                </span>
-              </div>
+        {/* TAB 2: MACRO STUDIO */}
+        {activeTab === 'macros' && (
+          <MacroStudio
+            activeOptions={options}
+            onApplyPack={(newOptions) => setOptions(newOptions)}
+          />
+        )}
 
-              {/* Google Meet / Zoom Conference Simulator */}
-              <div className="flex-1">
-                <MeetingRoom
-                  onTranscriptUpdate={handleTranscriptUpdate}
-                  userSpeakingText={currentSpeakingText}
-                  isUserSpeaking={isSpeaking}
-                  activeFloorUser={isFloorReserved ? 'Alex Rivera' : undefined}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
+        {/* TAB 3: ANALYTICS */}
+        {activeTab === 'analytics' && (
+          <AnalyticsDashboard
+            totalPhrasesSpoken={totalPhrasesSpoken}
+            totalWordsSpoken={totalWordsSpoken}
+            abortedCount={abortedCount}
+            activeDwellTimeMs={dwellTimeMs}
+          />
+        )}
+      </div>
 
       {/* Deep-Dive Architecture & Devlympics Solution Mapping */}
       <section className="px-4 sm:px-6 py-12 max-w-7xl mx-auto w-full border-t border-neutral-800/80 mt-12">
@@ -378,7 +500,6 @@ export default function SynapseFlowPage() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Card 1 */}
           <div className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-5 space-y-3 hover:border-cyan-500/50 transition duration-200">
             <div className="w-10 h-10 rounded-xl bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
               <Eye className="w-5 h-5" />
@@ -394,7 +515,6 @@ export default function SynapseFlowPage() {
             </div>
           </div>
 
-          {/* Card 2 */}
           <div className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-5 space-y-3 hover:border-emerald-500/50 transition duration-200">
             <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
               <Zap className="w-5 h-5" />
@@ -405,11 +525,10 @@ export default function SynapseFlowPage() {
               Instead of spelling letter-by-letter, 1 glance selects a contextually intelligent response.
             </p>
             <div className="pt-2 text-[11px] font-mono text-emerald-300">
-              Bandwidth: 120+ WPM equivalent communication rate
+              Bandwidth: 130+ WPM equivalent communication rate
             </div>
           </div>
 
-          {/* Card 3 */}
           <div className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-5 space-y-3 hover:border-purple-500/50 transition duration-200">
             <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-purple-400">
               <Volume2 className="w-5 h-5" />
@@ -433,7 +552,7 @@ export default function SynapseFlowPage() {
         </p>
       </footer>
 
-      {/* Settings Drawer Modal */}
+      {/* Modals & Drawers */}
       <SettingsDrawer
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -443,6 +562,36 @@ export default function SynapseFlowPage() {
         onDwellTimeChange={setDwellTimeMs}
         isSimulatingMouse={isSimulatingMouse}
         onToggleMouseSimulation={() => setIsSimulatingMouse(!isSimulatingMouse)}
+      />
+
+      <SlackIntegrationModal
+        isOpen={isSlackOpen}
+        onClose={() => setIsSlackOpen(false)}
+        slackEnabled={slackEnabled}
+        onToggleSlack={setSlackEnabled}
+        channel={slackChannel}
+        onChannelChange={setSlackChannel}
+        webhookUrl={slackWebhookUrl}
+        onWebhookUrlChange={setSlackWebhookUrl}
+        lastDispatchedMessage={lastSlackDispatched}
+      />
+
+      <VirtualAudioGuide
+        isOpen={isAudioGuideOpen}
+        onClose={() => setIsAudioGuideOpen(false)}
+      />
+
+      <OnboardingModal
+        isOpen={isOnboardingOpen}
+        onClose={() => setIsOnboardingOpen(false)}
+        onStartCalibration={() => setCalibrationModalOpen(true)}
+      />
+
+      <CalibrationModal
+        isOpen={calibrationModalOpen}
+        onClose={() => setCalibrationModalOpen(false)}
+        rawGaze={{ x: 0.5, y: 0.5 }}
+        onCalibrationComplete={() => setCalibrationModalOpen(false)}
       />
     </main>
   );
