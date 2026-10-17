@@ -1,27 +1,25 @@
 // Multi-Modal Head Gesture & Facial Action Unit (AU) Tracker
 // Tracks Head Nod (Yes), Head Shake (No), Brow Raise (Attention Beacon)
-import { distance2D } from './irisTracker';
-
-export interface GestureState {
-  headPitch: number; // Vertical tilt (nod)
-  headYaw: number;   // Horizontal turn (shake)
-  browRaise: number; // Eyebrow raise distance
-  isNodding: boolean;
-  isShaking: boolean;
-  isBrowRaised: boolean;
-}
+import { GestureDiagnostics, GestureType } from '../types';
 
 export class GestureEngine {
   private pitchHistory: number[] = [];
   private yawHistory: number[] = [];
   private baselineBrowDistance: number | null = null;
+  private lastTriggerTime = 0;
+  private lastTriggeredGesture: GestureType | undefined = undefined;
 
-  public processGestures(landmarks: any[]): GestureState {
+  // Cooldown in ms to prevent accidental multiple triggers for one physical movement
+  private readonly TRIGGER_COOLDOWN_MS = 1400;
+
+  public processGestures(landmarks: any[]): GestureDiagnostics {
+    const now = Date.now();
+
     if (!landmarks || landmarks.length < 478) {
       return {
         headPitch: 0,
         headYaw: 0,
-        browRaise: 0,
+        browRatio: 1.0,
         isNodding: false,
         isShaking: false,
         isBrowRaised: false,
@@ -32,8 +30,8 @@ export class GestureEngine {
     // 1: Nose tip
     // 10: Forehead top
     // 152: Chin bottom
-    // 234: Left face edge (ear)
-    // 454: Right face edge (ear)
+    // 234: Left face edge (cheek/ear)
+    // 454: Right face edge (cheek/ear)
     // 70: Left eyebrow mid
     // 300: Right eyebrow mid
     // 159, 386: Eye upper eyelids
@@ -46,7 +44,7 @@ export class GestureEngine {
     // Compute Head Pitch (vertical angle relative to facial height)
     const faceHeight = Math.max(0.001, chin.y - forehead.y);
     const noseRelativeY = (nose.y - forehead.y) / faceHeight;
-    const pitch = (noseRelativeY - 0.6) * 100; // Normalised pitch
+    const pitch = (noseRelativeY - 0.58) * 100; // Normalised pitch
 
     // Compute Head Yaw (horizontal rotation relative to face width)
     const faceWidth = Math.max(0.001, rightCheek.x - leftCheek.x);
@@ -64,10 +62,14 @@ export class GestureEngine {
 
     if (this.baselineBrowDistance === null) {
       this.baselineBrowDistance = currentBrowDist;
+    } else {
+      // Slow adaptive baseline drift (EMA)
+      this.baselineBrowDistance = this.baselineBrowDistance * 0.995 + currentBrowDist * 0.005;
     }
 
-    const browRatio = this.baselineBrowDistance > 0 ? currentBrowDist / this.baselineBrowDistance : 1.0;
-    const isBrowRaised = browRatio > 1.35;
+    const browRatio =
+      this.baselineBrowDistance > 0 ? currentBrowDist / this.baselineBrowDistance : 1.0;
+    const rawBrowRaised = browRatio > 1.28;
 
     // Rolling History for oscillatory gesture detection
     this.pitchHistory.push(pitch);
@@ -75,25 +77,56 @@ export class GestureEngine {
     if (this.pitchHistory.length > 20) this.pitchHistory.shift();
     if (this.yawHistory.length > 20) this.yawHistory.shift();
 
-    // Nod Detection: Look for sinusoidal vertical motion (amplitude > 8 over 15 frames)
+    // Nod Detection: Look for sinusoidal vertical motion (amplitude > 12 over 15 frames)
     const minPitch = Math.min(...this.pitchHistory);
     const maxPitch = Math.max(...this.pitchHistory);
     const pitchDelta = maxPitch - minPitch;
-    const isNodding = pitchDelta > 14 && this.pitchHistory.length >= 15;
+    const rawNodding = pitchDelta > 13 && this.pitchHistory.length >= 14;
 
-    // Shake Detection: Look for sinusoidal horizontal motion (amplitude > 12 over 15 frames)
+    // Shake Detection: Look for sinusoidal horizontal motion (amplitude > 15 over 15 frames)
     const minYaw = Math.min(...this.yawHistory);
     const maxYaw = Math.max(...this.yawHistory);
     const yawDelta = maxYaw - minYaw;
-    const isShaking = yawDelta > 18 && this.yawHistory.length >= 15;
+    const rawShaking = yawDelta > 16 && this.yawHistory.length >= 14;
+
+    const canTrigger = now - this.lastTriggerTime > this.TRIGGER_COOLDOWN_MS;
+    let isNodding = false;
+    let isShaking = false;
+    let isBrowRaised = false;
+
+    if (canTrigger) {
+      if (rawBrowRaised) {
+        isBrowRaised = true;
+        this.lastTriggeredGesture = 'browRaise';
+        this.lastTriggerTime = now;
+      } else if (rawNodding) {
+        isNodding = true;
+        this.lastTriggeredGesture = 'nod';
+        this.lastTriggerTime = now;
+        this.pitchHistory = []; // Reset history after trigger
+      } else if (rawShaking) {
+        isShaking = true;
+        this.lastTriggeredGesture = 'shake';
+        this.lastTriggerTime = now;
+        this.yawHistory = []; // Reset history after trigger
+      }
+    }
 
     return {
-      headPitch: pitch,
-      headYaw: yaw,
-      browRaise: browRatio,
+      headPitch: Math.round(pitch * 10) / 10,
+      headYaw: Math.round(yaw * 10) / 10,
+      browRatio: Math.round(browRatio * 100) / 100,
       isNodding,
       isShaking,
       isBrowRaised,
+      lastGesture: this.lastTriggeredGesture,
+      lastGestureTimestamp: this.lastTriggerTime,
     };
+  }
+
+  public resetBaseline(): void {
+    this.baselineBrowDistance = null;
+    this.pitchHistory = [];
+    this.yawHistory = [];
   }
 }

@@ -57,3 +57,26 @@ export interface DynamicHUDState {
   tone: ToneType;
   options: QuadrantOption[];
 }
+
+export interface VoiceProfile {
+  userName: string;
+  role: string;
+  techStack: string;
+  selectedVoice: string;
+  speechPitch: number;
+  speechRate: number;
+}
+
+export type GestureType = 'nod' | 'shake' | 'browRaise';
+
+export interface GestureDiagnostics {
+  headPitch: number;
+  headYaw: number;
+  browRatio: number;
+  isNodding: boolean;
+  isShaking: boolean;
+  isBrowRaised: boolean;
+  lastGesture?: GestureType;
+  lastGestureTimestamp?: number;
+}
+

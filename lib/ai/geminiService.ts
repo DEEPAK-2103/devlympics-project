@@ -8,6 +8,9 @@ export interface ExpandIntentParams {
   tone: ToneType;
   meetingContext?: string;
   activeTopic?: string;
+  userName?: string;
+  userRole?: string;
+  techStack?: string;
 }
 
 export interface DistillMeetingParams {
@@ -43,6 +46,8 @@ export class GeminiService {
 Convert this sparse intent into ONE natural spoken sentence.
 
 [Parameters]:
+- Speaker: "${params.userName || 'Alex Rivera'}" (${params.userRole || 'Staff Distributed Systems Architect'})
+- Domain Vocabulary: "${params.techStack || 'Distributed Systems, TypeScript, Go, Redis'}"
 - Intent: "${params.intentToken}"
 - Category: "${params.category}"
 - Tone: ${params.tone} (${toneInstructions})

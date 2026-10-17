@@ -15,6 +15,9 @@ export async function POST(req: NextRequest) {
       tone: body.tone || 'professional',
       meetingContext: body.meetingContext || '',
       activeTopic: body.activeTopic || '',
+      userName: body.userName,
+      userRole: body.userRole,
+      techStack: body.techStack,
     });
 
     return NextResponse.json({

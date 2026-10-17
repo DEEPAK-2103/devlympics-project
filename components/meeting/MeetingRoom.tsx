@@ -23,6 +23,8 @@ interface Props {
   userSpeakingText?: string;
   isUserSpeaking: boolean;
   activeFloorUser?: string;
+  userName?: string;
+  userRole?: string;
 }
 
 const INITIAL_PEERS = [
@@ -54,6 +56,8 @@ export default function MeetingRoom({
   userSpeakingText,
   isUserSpeaking,
   activeFloorUser,
+  userName = 'Alex Rivera',
+  userRole = 'Staff Distributed Systems Architect',
 }: Props) {
   const [messages, setMessages] = useState<MeetingTranscriptEntry[]>([
     {
@@ -61,7 +65,7 @@ export default function MeetingRoom({
       speaker: 'Sarah Chen',
       role: 'Staff Architect',
       avatarColor: 'bg-emerald-600',
-      text: "Morning team! Let's kick off the sprint review. Alex, how are we looking on the auth middleware and rate limiting PR?",
+      text: "Morning team! Let's kick off the sprint review. How are we looking on the auth middleware and rate limiting PR?",
       timestamp: '10:01 AM',
       isUser: false,
     },
@@ -83,8 +87,8 @@ export default function MeetingRoom({
     if (userSpeakingText && isUserSpeaking) {
       const newEntry: MeetingTranscriptEntry = {
         id: `user-${Date.now()}`,
-        speaker: 'Alex Rivera (You)',
-        role: 'Assistive Voice Bridge',
+        speaker: `${userName} (You)`,
+        role: userRole,
         avatarColor: 'bg-cyan-600',
         text: userSpeakingText,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -99,7 +103,7 @@ export default function MeetingRoom({
         return [...prev, newEntry];
       });
     }
-  }, [userSpeakingText, isUserSpeaking]);
+  }, [userSpeakingText, isUserSpeaking, userName, userRole]);
 
   const audioCanvasRef = useRef<HTMLCanvasElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -269,6 +273,13 @@ export default function MeetingRoom({
     onTranscriptUpdate(text, speaker);
   };
 
+  const userInitials = userName
+    .split(' ')
+    .map((n) => n[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+
   return (
     <div className="flex flex-col h-full bg-neutral-950 border border-neutral-800 rounded-2xl overflow-hidden shadow-2xl">
       {/* Top Meeting Header */}
@@ -315,7 +326,7 @@ export default function MeetingRoom({
 
       {/* Video Grid Tiles */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 p-3 bg-neutral-950/60 border-b border-neutral-800/80">
-        {/* User Tile (Alex) */}
+        {/* User Tile */}
         <div
           className={`relative aspect-video rounded-xl overflow-hidden bg-neutral-900 border flex flex-col justify-between p-2.5 transition-all duration-300 ${
             isUserSpeaking
@@ -338,13 +349,13 @@ export default function MeetingRoom({
 
           <div className="flex flex-col items-center justify-center my-auto">
             <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center text-white font-bold text-sm shadow-md">
-              AR
+              {userInitials}
             </div>
           </div>
 
           <div className="flex items-center justify-between text-[11px] text-neutral-300 z-10">
-            <span className="font-semibold text-white">Alex Rivera (You)</span>
-            <span className="text-[10px] text-neutral-400">TTS Proxy</span>
+            <span className="font-semibold text-white truncate max-w-[95px]">{userName} (You)</span>
+            <span className="text-[10px] text-neutral-400 truncate max-w-[65px]">{userRole.split(' ')[0]}</span>
           </div>
         </div>
 

@@ -7,33 +7,31 @@ import { ShieldAlert, HeartPulse, Bell, CheckCircle2, PhoneCall, Coffee } from '
 interface Props {
   isOpen: boolean;
   onClose: () => void;
+  onBroadcastAlert?: (alertType: 'break' | 'caregiver' | 'medical', spokenText: string) => void;
 }
 
-export default function CaregiverSafeguard({ isOpen, onClose }: Props) {
+export default function CaregiverSafeguard({ isOpen, onClose, onBroadcastAlert }: Props) {
   const [activeAlert, setActiveAlert] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const handleTriggerAssist = (type: 'break' | 'caregiver' | 'medical') => {
+    let speechText = '';
     if (type === 'break') {
       setActiveAlert('break');
-      SpeechService.speakText(
-        'Team, I need to request a brief 5-minute ergonomic posture and hydration break.',
-        'professional'
-      );
+      speechText = 'Team, I need to request a brief 5-minute ergonomic posture and hydration break.';
+      SpeechService.speakText(speechText, 'professional');
     } else if (type === 'caregiver') {
       setActiveAlert('caregiver');
-      SpeechService.speakText(
-        'Alerting caregiver for physical positioning assistance.',
-        'professional'
-      );
+      speechText = 'Alerting caregiver for physical positioning assistance.';
+      SpeechService.speakText(speechText, 'professional');
     } else {
       setActiveAlert('medical');
-      SpeechService.speakText(
-        'Emergency medical pause requested. Please hold call immediately.',
-        'direct'
-      );
+      speechText = 'Emergency medical pause requested. Please hold call immediately.';
+      SpeechService.speakText(speechText, 'direct');
     }
+
+    onBroadcastAlert?.(type, speechText);
   };
 
   return (
@@ -46,7 +44,9 @@ export default function CaregiverSafeguard({ isOpen, onClose }: Props) {
             </div>
             <div>
               <h3 className="font-bold text-base text-neutral-100">Caregiver & Assistive Safety Net</h3>
-              <p className="text-[11px] text-neutral-400">Discreet ergonomic distress and physical assistance triggers</p>
+              <p className="text-[11px] text-neutral-400">
+                Discreet ergonomic distress and physical assistance triggers
+              </p>
             </div>
           </div>
           <button
@@ -72,7 +72,7 @@ export default function CaregiverSafeguard({ isOpen, onClose }: Props) {
                   Request 5-Minute Ergonomic Break
                 </p>
                 <p className="text-[11px] text-neutral-400">
-                  Politely speaks aloud to meeting peers requesting a brief posture & eye rest break.
+                  Politely speaks aloud to meeting peers requesting a brief posture & eye rest break, and notifies Slack.
                 </p>
               </div>
             </div>
@@ -92,7 +92,7 @@ export default function CaregiverSafeguard({ isOpen, onClose }: Props) {
                   Ping Caregiver / Physical Assistant
                 </p>
                 <p className="text-[11px] text-neutral-400">
-                  Dispatches an instant alert to nurse/family member for wheelchair or physical adjustments.
+                  Dispatches an instant high-priority alert to nurse/family member for wheelchair or physical adjustments.
                 </p>
               </div>
             </div>
@@ -112,7 +112,7 @@ export default function CaregiverSafeguard({ isOpen, onClose }: Props) {
                   Emergency Medical Pause
                 </p>
                 <p className="text-[11px] text-neutral-400">
-                  Immediately halts meeting audio and signals urgent distress to attendees.
+                  Immediately halts meeting audio and signals urgent distress to attendees and team channel.
                 </p>
               </div>
             </div>
@@ -122,7 +122,11 @@ export default function CaregiverSafeguard({ isOpen, onClose }: Props) {
         {activeAlert && (
           <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-xl flex items-center gap-2 text-xs text-emerald-400 animate-in fade-in duration-150">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>Safeguard alert triggered and broadcasted successfully.</span>
+            <span>
+              {activeAlert === 'break' && 'Ergonomic break announced and logged to Slack.'}
+              {activeAlert === 'caregiver' && 'Caregiver ping broadcasted successfully.'}
+              {activeAlert === 'medical' && 'URGENT: Emergency medical alert dispatched to all channels!'}
+            </span>
           </div>
         )}
 

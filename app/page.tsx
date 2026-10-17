@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import EyeTracker from '@/components/vision/EyeTracker';
 import RadialHUD from '@/components/hud/RadialHUD';
 import FloorBeacon from '@/components/hud/FloorBeacon';
@@ -16,8 +16,9 @@ import SlackIntegrationModal from '@/components/integrations/SlackIntegrationMod
 import VirtualAudioGuide from '@/components/integrations/VirtualAudioGuide';
 import OnboardingModal from '@/components/onboarding/OnboardingModal';
 import CalibrationModal from '@/components/vision/CalibrationModal';
-import { GazeCoords, QuadrantOption, ToneType } from '@/lib/types';
-import { SpeechService } from '@/lib/audio/speechService';
+import { GazeCoords, QuadrantOption, ToneType, VoiceProfile, GestureType, CalibrationMatrix } from '@/lib/types';
+import { SpeechService, DEFAULT_VOICE_PROFILE } from '@/lib/audio/speechService';
+import { CalibrationManager } from '@/lib/vision/calibration';
 import Link from 'next/link';
 import {
   Sparkles,
@@ -53,6 +54,7 @@ export default function SynapseFlowPage() {
   // Gaze & Vision State
   const [activeQuadrant, setActiveQuadrant] = useState<number | null>(null);
   const [gazeCoords, setGazeCoords] = useState<GazeCoords | null>(null);
+  const [rawGazeSample, setRawGazeSample] = useState<{ x: number; y: number }>({ x: 0.5, y: 0.5 });
   const [isProlongedBlink, setIsProlongedBlink] = useState(false);
   const [isSimulatingMouse, setIsSimulatingMouse] = useState(false);
   const [calibrationModalOpen, setCalibrationModalOpen] = useState(false);
@@ -63,6 +65,9 @@ export default function SynapseFlowPage() {
   const [currentSpeakingText, setCurrentSpeakingText] = useState('');
   const [tone, setTone] = useState<ToneType>('professional');
   const [dwellTimeMs, setDwellTimeMs] = useState(350);
+
+  // User Profile State
+  const [profile, setProfile] = useState<VoiceProfile>(DEFAULT_VOICE_PROFILE);
 
   // Options & Meeting Context
   const [options, setOptions] = useState<QuadrantOption[]>(PRESET_PACKS[0].options);
@@ -85,6 +90,49 @@ export default function SynapseFlowPage() {
   const [slackChannel, setSlackChannel] = useState('#engineering-standup');
   const [slackWebhookUrl, setSlackWebhookUrl] = useState('');
   const [lastSlackDispatched, setLastSlackDispatched] = useState('');
+
+  // Cross-Window Synchronizer
+  const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+
+  useEffect(() => {
+    const saved = SpeechService.loadSavedVoiceProfile();
+    setProfile(saved);
+
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      const channel = new BroadcastChannel('synapseflow_bus');
+      broadcastChannelRef.current = channel;
+
+      channel.onmessage = (event) => {
+        const data = event.data;
+        if (!data) return;
+
+        if (data.type === 'REQUEST_SYNC') {
+          channel.postMessage({
+            type: 'SYNC_STATE',
+            options,
+            tone,
+            profile,
+          });
+        } else if (data.type === 'FLOOR_RESERVE') {
+          setIsFloorReserved(Boolean(data.isReserved));
+        } else if (data.type === 'SPOKEN_PHRASE') {
+          const phrase = data.text || '';
+          setTotalPhrasesSpoken((c) => c + 1);
+          setTotalWordsSpoken((w) => w + phrase.split(' ').length);
+          setCurrentSpeakingText(phrase);
+          setIsSpeaking(true);
+          setTimeout(() => {
+            setIsSpeaking(false);
+            setCurrentSpeakingText('');
+          }, 3000);
+        } else if (data.type === 'TONE_UPDATE') {
+          if (data.tone) setTone(data.tone);
+        }
+      };
+
+      return () => channel.close();
+    }
+  }, [options, tone, profile]);
 
   // Handle Aborted Eye-Closure
   const handleProlongedBlink = useCallback(() => {
@@ -145,6 +193,9 @@ export default function SynapseFlowPage() {
             tone,
             meetingContext: lastMeetingDialogue,
             activeTopic: 'Sprint Review',
+            userName: profile.userName,
+            userRole: profile.role,
+            techStack: profile.techStack,
           }),
         });
 
@@ -155,10 +206,16 @@ export default function SynapseFlowPage() {
         setTotalPhrasesSpoken((c) => c + 1);
         setTotalWordsSpoken((w) => w + speechOutput.split(' ').length);
 
-        // Speak aloud via TTS
+        // Speak aloud via TTS using user's configured profile
         SpeechService.speakText(speechOutput, tone, () => {
           setIsSpeaking(false);
           setCurrentSpeakingText('');
+        }, profile);
+
+        // Notify floating HUD
+        broadcastChannelRef.current?.postMessage({
+          type: 'SPOKEN_PHRASE',
+          text: speechOutput,
         });
 
         // Broadcast to Slack if enabled
@@ -171,7 +228,7 @@ export default function SynapseFlowPage() {
               message: speechOutput,
               channel: slackChannel,
               webhookUrl: slackWebhookUrl,
-              userName: 'Alex Rivera',
+              userName: profile.userName,
               tone,
             }),
           }).catch((err) => console.warn('Slack broadcast background notice:', err));
@@ -181,10 +238,57 @@ export default function SynapseFlowPage() {
         SpeechService.speakText(previewFallback, tone, () => {
           setIsSpeaking(false);
           setCurrentSpeakingText('');
-        });
+        }, profile);
       }
     },
-    [tone, lastMeetingDialogue, slackEnabled, slackChannel, slackWebhookUrl]
+    [tone, lastMeetingDialogue, slackEnabled, slackChannel, slackWebhookUrl, profile]
+  );
+
+  // Facial Gesture Action Handler (Head Nod, Head Shake, Eyebrow Raise)
+  const handleGesture = useCallback(
+    (gesture: GestureType) => {
+      if (gesture === 'browRaise') {
+        setIsFloorReserved(true);
+        SpeechService.playGestureChime('brow');
+      } else if (gesture === 'nod') {
+        SpeechService.playGestureChime('nod');
+        if (activeQuadrant !== null) {
+          const selected = options.find((opt) => opt.quadrant === activeQuadrant);
+          if (selected) {
+            handleSelectOption(selected);
+          }
+        } else {
+          // Quick Affirmative spoken phrase
+          const quickAgree = "Yes, exactly, I completely agree.";
+          setCurrentSpeakingText(quickAgree);
+          setIsSpeaking(true);
+          SpeechService.speakText(quickAgree, tone, () => {
+            setIsSpeaking(false);
+            setCurrentSpeakingText('');
+          }, profile);
+          setTotalPhrasesSpoken((c) => c + 1);
+          setTotalWordsSpoken((w) => w + quickAgree.split(' ').length);
+          if (slackEnabled) {
+            fetch('/api/slack-broadcast', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                message: quickAgree,
+                channel: slackChannel,
+                webhookUrl: slackWebhookUrl,
+                userName: profile.userName,
+                tone,
+              }),
+            }).catch(() => {});
+          }
+        }
+      } else if (gesture === 'shake') {
+        SpeechService.playGestureChime('shake');
+        setIsFloorReserved(false);
+        setActiveQuadrant(null);
+      }
+    },
+    [activeQuadrant, options, handleSelectOption, tone, profile, slackEnabled, slackChannel, slackWebhookUrl]
   );
 
   // Open Pop-out Floating HUD in native Always-On-Top Picture-in-Picture or pop-out window
@@ -248,7 +352,7 @@ export default function SynapseFlowPage() {
         isFloorReserved={isFloorReserved}
         isSpeaking={isSpeaking}
         speakingText={currentSpeakingText}
-        userName="Alex Rivera"
+        userName={profile.userName}
       />
 
       {/* Top Header / Startup Navigation */}
@@ -505,6 +609,8 @@ export default function SynapseFlowPage() {
                   <EyeTracker
                     onGazeUpdate={handleGazeUpdate}
                     onProlongedBlink={handleProlongedBlink}
+                    onGesture={handleGesture}
+                    onRawGazeSample={setRawGazeSample}
                     isSimulatingMouse={isSimulatingMouse}
                     onToggleMouseSimulation={() => setIsSimulatingMouse(!isSimulatingMouse)}
                   />
@@ -560,7 +666,9 @@ export default function SynapseFlowPage() {
                     onTranscriptUpdate={handleTranscriptUpdate}
                     userSpeakingText={currentSpeakingText}
                     isUserSpeaking={isSpeaking}
-                    activeFloorUser={isFloorReserved ? 'Alex Rivera' : undefined}
+                    activeFloorUser={isFloorReserved ? profile.userName : undefined}
+                    userName={profile.userName}
+                    userRole={profile.role}
                   />
                 </div>
               </div>
@@ -577,8 +685,31 @@ export default function SynapseFlowPage() {
             onLoadPRCardsToHUD={(newOptions) => {
               setOptions(newOptions);
               setActiveTab('cockpit');
+              broadcastChannelRef.current?.postMessage({
+                type: 'OPTIONS_UPDATE',
+                options: newOptions,
+              });
             }}
             tone={tone}
+            userName={profile.userName}
+            userRole={profile.role}
+            onReviewAction={(comment, prTitle) => {
+              setTotalPhrasesSpoken((c) => c + 1);
+              setTotalWordsSpoken((w) => w + comment.split(' ').length);
+              if (slackEnabled) {
+                fetch('/api/slack-broadcast', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    message: `[Code Review] ${prTitle}\n"${comment}"`,
+                    channel: slackChannel,
+                    webhookUrl: slackWebhookUrl,
+                    userName: profile.userName,
+                    tone,
+                  }),
+                }).catch(() => {});
+              }
+            }}
           />
         )}
 
@@ -586,13 +717,29 @@ export default function SynapseFlowPage() {
         {activeTab === 'macros' && (
           <MacroStudio
             activeOptions={options}
-            onApplyPack={(newOptions) => setOptions(newOptions)}
+            onApplyPack={(newOptions) => {
+              setOptions(newOptions);
+              broadcastChannelRef.current?.postMessage({
+                type: 'OPTIONS_UPDATE',
+                options: newOptions,
+              });
+            }}
           />
         )}
 
         {/* TAB 5: VOICE & PERSONA IDENTITY */}
         {activeTab === 'identity' && (
-          <VoiceProfileManager tone={tone} onToneChange={setTone} />
+          <VoiceProfileManager
+            tone={tone}
+            onToneChange={setTone}
+            onProfileChange={(newProfile) => {
+              setProfile(newProfile);
+              broadcastChannelRef.current?.postMessage({
+                type: 'PROFILE_UPDATE',
+                profile: newProfile,
+              });
+            }}
+          />
         )}
 
         {/* TAB 6: ANALYTICS */}
@@ -602,6 +749,11 @@ export default function SynapseFlowPage() {
             totalWordsSpoken={totalWordsSpoken}
             abortedCount={abortedCount}
             activeDwellTimeMs={dwellTimeMs}
+            onResetTelemetry={() => {
+              setTotalPhrasesSpoken(0);
+              setTotalWordsSpoken(0);
+              setAbortedCount(0);
+            }}
           />
         )}
       </div>
@@ -700,6 +852,29 @@ export default function SynapseFlowPage() {
       <CaregiverSafeguard
         isOpen={isCaregiverOpen}
         onClose={() => setIsCaregiverOpen(false)}
+        onBroadcastAlert={(type, message) => {
+          setTotalPhrasesSpoken((c) => c + 1);
+          setTotalWordsSpoken((w) => w + message.split(' ').length);
+          if (slackEnabled) {
+            const prefix =
+              type === 'medical'
+                ? '🚨 [EMERGENCY MEDICAL PAUSE]'
+                : type === 'caregiver'
+                ? '🔔 [CAREGIVER ASSISTANCE PING]'
+                : '☕ [ERGONOMIC BREAK REQUEST]';
+            fetch('/api/slack-broadcast', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                message: `${prefix} ${profile.userName}: "${message}"`,
+                channel: slackChannel,
+                webhookUrl: slackWebhookUrl,
+                userName: profile.userName,
+                tone: 'direct',
+              }),
+            }).catch(() => {});
+          }
+        }}
       />
 
       <VirtualAudioGuide
@@ -716,8 +891,11 @@ export default function SynapseFlowPage() {
       <CalibrationModal
         isOpen={calibrationModalOpen}
         onClose={() => setCalibrationModalOpen(false)}
-        rawGaze={{ x: 0.5, y: 0.5 }}
-        onCalibrationComplete={() => setCalibrationModalOpen(false)}
+        rawGaze={rawGazeSample}
+        onCalibrationComplete={(matrix) => {
+          CalibrationManager.saveCalibration(matrix);
+          setCalibrationModalOpen(false);
+        }}
       />
     </main>
   );

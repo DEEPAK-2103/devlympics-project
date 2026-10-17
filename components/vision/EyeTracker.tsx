@@ -1,28 +1,49 @@
 'use client';
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { GazeCoords, CalibrationMatrix } from '@/lib/types';
+import { GazeCoords, CalibrationMatrix, GestureType, GestureDiagnostics } from '@/lib/types';
 import { IrisGazeEngine } from '@/lib/vision/irisTracker';
 import { CalibrationManager } from '@/lib/vision/calibration';
+import { GestureEngine } from '@/lib/vision/gestureTracker';
 import CalibrationModal from './CalibrationModal';
-import { Camera, Eye, Sliders, AlertCircle, RefreshCw, MousePointer, ShieldAlert } from 'lucide-react';
+import {
+  Camera,
+  Eye,
+  Sliders,
+  AlertCircle,
+  RefreshCw,
+  MousePointer,
+  ShieldAlert,
+  Sparkles,
+  CheckCircle2,
+  Smile,
+} from 'lucide-react';
 
 interface Props {
   onGazeUpdate: (coords: GazeCoords, quadrant: 0 | 1 | 2 | 3 | null) => void;
   onProlongedBlink?: () => void;
+  onGesture?: (gesture: GestureType) => void;
+  onRawGazeSample?: (raw: { x: number; y: number }) => void;
   isSimulatingMouse?: boolean;
   onToggleMouseSimulation?: () => void;
+  externalCalibrationTrigger?: boolean;
+  onCalibrationComplete?: (matrix: CalibrationMatrix) => void;
 }
 
 export default function EyeTracker({
   onGazeUpdate,
   onProlongedBlink,
+  onGesture,
+  onRawGazeSample,
   isSimulatingMouse = false,
   onToggleMouseSimulation,
+  externalCalibrationTrigger,
+  onCalibrationComplete,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<IrisGazeEngine>(new IrisGazeEngine());
+  const gestureEngineRef = useRef<GestureEngine>(new GestureEngine());
 
   const [isLoading, setIsLoading] = useState(true);
   const [cameraActive, setCameraActive] = useState(false);
@@ -33,6 +54,30 @@ export default function EyeTracker({
   const [calibrationModalOpen, setCalibrationModalOpen] = useState(false);
   const [calibrationMatrix, setCalibrationMatrix] = useState<CalibrationMatrix | null>(null);
   const [rawGazeSample, setRawGazeSample] = useState<{ x: number; y: number }>({ x: 0.5, y: 0.5 });
+
+  // Gesture Diagnostics state
+  const [gesturesEnabled, setGesturesEnabled] = useState(true);
+  const [gestureDiagnostics, setGestureDiagnostics] = useState<GestureDiagnostics>({
+    headPitch: 0,
+    headYaw: 0,
+    browRatio: 1.0,
+    isNodding: false,
+    isShaking: false,
+    isBrowRaised: false,
+  });
+  const [activeGestureToast, setActiveGestureToast] = useState<{
+    type: GestureType;
+    label: string;
+    sublabel: string;
+    color: string;
+  } | null>(null);
+
+  // Watch for external calibration open requests
+  useEffect(() => {
+    if (externalCalibrationTrigger) {
+      setCalibrationModalOpen(true);
+    }
+  }, [externalCalibrationTrigger]);
 
   // Load saved calibration on mount
   useEffect(() => {
@@ -84,7 +129,6 @@ export default function EyeTracker({
       setErrorMessage(null);
 
       try {
-        // Dynamically import tasks-vision to prevent SSR issues
         const visionModule = await import('@mediapipe/tasks-vision');
         const { FaceLandmarker, FilesetResolver } = visionModule;
 
@@ -152,7 +196,7 @@ export default function EyeTracker({
           if (results && results.faceLandmarks && results.faceLandmarks.length > 0) {
             const landmarks = results.faceLandmarks[0];
 
-            // Process gaze with engine
+            // 1. Process Iris Gaze with engine
             const coords = engineRef.current.processFrame(landmarks);
             const quadrant = engineRef.current.getGazeQuadrant(coords.x, coords.y);
 
@@ -162,6 +206,9 @@ export default function EyeTracker({
             // Save raw sample for calibration
             const rawRatio = engineRef.current.extractRawIrisRatio(landmarks);
             setRawGazeSample(rawRatio);
+            if (onRawGazeSample) {
+              onRawGazeSample(rawRatio);
+            }
 
             if (coords.isProlongedBlink && onProlongedBlink) {
               onProlongedBlink();
@@ -169,6 +216,41 @@ export default function EyeTracker({
 
             if (!isSimulatingMouse) {
               onGazeUpdate(coords, quadrant);
+            }
+
+            // 2. Process Multi-Modal Facial Gestures
+            if (gesturesEnabled) {
+              const diag = gestureEngineRef.current.processGestures(landmarks);
+              setGestureDiagnostics(diag);
+
+              if (diag.isBrowRaised) {
+                setActiveGestureToast({
+                  type: 'browRaise',
+                  label: 'Brow Raise Detected',
+                  sublabel: 'Reserving Meeting Floor Beacon',
+                  color: 'border-cyan-400 bg-cyan-950/90 text-cyan-200',
+                });
+                onGesture?.('browRaise');
+                setTimeout(() => setActiveGestureToast(null), 1500);
+              } else if (diag.isNodding) {
+                setActiveGestureToast({
+                  type: 'nod',
+                  label: 'Head Nod Detected',
+                  sublabel: 'Quick Affirmation Dispatched',
+                  color: 'border-emerald-400 bg-emerald-950/90 text-emerald-200',
+                });
+                onGesture?.('nod');
+                setTimeout(() => setActiveGestureToast(null), 1500);
+              } else if (diag.isShaking) {
+                setActiveGestureToast({
+                  type: 'shake',
+                  label: 'Head Shake Detected',
+                  sublabel: 'Soft Hold / Selection Aborted',
+                  color: 'border-amber-400 bg-amber-950/90 text-amber-200',
+                });
+                onGesture?.('shake');
+                setTimeout(() => setActiveGestureToast(null), 1500);
+              }
             }
 
             // Draw eye mesh & irises on canvas
@@ -245,12 +327,18 @@ export default function EyeTracker({
         landmarker.close();
       }
     };
-  }, [isSimulatingMouse, onGazeUpdate, onProlongedBlink]);
+  }, [isSimulatingMouse, onGazeUpdate, onProlongedBlink, onGesture, onRawGazeSample, gesturesEnabled]);
 
-  const handleCalibrationComplete = useCallback((matrix: CalibrationMatrix) => {
-    setCalibrationMatrix(matrix);
-    engineRef.current.setCalibration(matrix);
-  }, []);
+  const handleCalibrationComplete = useCallback(
+    (matrix: CalibrationMatrix) => {
+      setCalibrationMatrix(matrix);
+      engineRef.current.setCalibration(matrix);
+      if (onCalibrationComplete) {
+        onCalibrationComplete(matrix);
+      }
+    },
+    [onCalibrationComplete]
+  );
 
   return (
     <div className="relative rounded-2xl overflow-hidden bg-neutral-950 border border-neutral-800 shadow-xl group">
@@ -273,7 +361,9 @@ export default function EyeTracker({
         {isLoading && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-neutral-900/90 text-white gap-3 p-4 text-center">
             <div className="w-8 h-8 rounded-full border-2 border-cyan-400 border-t-transparent animate-spin"></div>
-            <p className="text-xs text-neutral-300 font-medium">Initializing MediaPipe 478-Landmark Vision Engine...</p>
+            <p className="text-xs text-neutral-300 font-medium">
+              Initializing MediaPipe 478-Landmark Vision Engine...
+            </p>
           </div>
         )}
 
@@ -302,17 +392,45 @@ export default function EyeTracker({
         {/* Live Diagnostics Pills */}
         <div className="absolute top-2 right-2 flex flex-col gap-1 items-end pointer-events-none">
           <div className="bg-neutral-900/85 backdrop-blur-md border border-neutral-700/60 rounded px-2 py-0.5 text-[10px] font-mono text-neutral-300 flex items-center gap-1.5">
-            <span className={`w-1.5 h-1.5 rounded-full ${cameraActive ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                cameraActive ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+              }`}
+            ></span>
             {fps} FPS
           </div>
           <div className="bg-neutral-900/85 backdrop-blur-md border border-neutral-700/60 rounded px-2 py-0.5 text-[10px] font-mono text-neutral-300">
-            EAR: <span className={currentEar < 0.2 ? 'text-red-400 font-bold' : 'text-cyan-400'}>{currentEar.toFixed(2)}</span>
+            EAR:{' '}
+            <span className={currentEar < 0.2 ? 'text-red-400 font-bold' : 'text-cyan-400'}>
+              {currentEar.toFixed(2)}
+            </span>
           </div>
+          {gesturesEnabled && cameraActive && (
+            <div className="bg-neutral-900/85 backdrop-blur-md border border-neutral-700/60 rounded px-2 py-0.5 text-[10px] font-mono text-neutral-300 flex items-center gap-1">
+              <span>Pose:</span>
+              <span className="text-cyan-400">{gestureDiagnostics.headPitch > 0 ? `+${gestureDiagnostics.headPitch}` : gestureDiagnostics.headPitch}°</span>
+              <span className="text-neutral-500">|</span>
+              <span className="text-purple-400">Brow: {gestureDiagnostics.browRatio}x</span>
+            </div>
+          )}
         </div>
+
+        {/* Active Gesture Trigger Toast */}
+        {activeGestureToast && (
+          <div
+            className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 border px-3.5 py-2 rounded-xl flex items-center gap-2.5 shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 duration-150 z-20 ${activeGestureToast.color}`}
+          >
+            <Sparkles className="w-4 h-4 shrink-0 animate-spin" />
+            <div>
+              <p className="text-xs font-bold leading-tight">{activeGestureToast.label}</p>
+              <p className="text-[10px] opacity-80">{activeGestureToast.sublabel}</p>
+            </div>
+          </div>
+        )}
 
         {/* Prolonged Blink Alert */}
         {isBlinking && (
-          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-red-500/90 text-white text-[11px] font-medium px-3 py-1 rounded-full flex items-center gap-1.5 animate-pulse shadow-lg">
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-red-500/90 text-white text-[11px] font-medium px-3 py-1 rounded-full flex items-center gap-1.5 animate-pulse shadow-lg z-10">
             <ShieldAlert className="w-3.5 h-3.5" /> Blink Detected
           </div>
         )}
@@ -323,12 +441,32 @@ export default function EyeTracker({
         <div className="flex items-center gap-2 text-neutral-300">
           <Eye className="w-4 h-4 text-cyan-400" />
           <span className="font-medium text-neutral-200">Zero-Hardware Gaze</span>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded ${calibrationMatrix ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-neutral-800 text-neutral-400'}`}>
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded ${
+              calibrationMatrix
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                : 'bg-neutral-800 text-neutral-400'
+            }`}
+          >
             {calibrationMatrix ? 'Calibrated' : 'Auto Default'}
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          {/* Facial Gestures Toggle */}
+          <button
+            onClick={() => setGesturesEnabled(!gesturesEnabled)}
+            title={gesturesEnabled ? 'Facial Gestures Active (Nod/Shake/Brow)' : 'Facial Gestures Paused'}
+            className={`py-1 px-2 rounded-lg border text-[11px] font-medium transition flex items-center gap-1 ${
+              gesturesEnabled
+                ? 'bg-cyan-950/60 border-cyan-500/40 text-cyan-300'
+                : 'bg-neutral-800 border-neutral-700 text-neutral-400'
+            }`}
+          >
+            <Smile className="w-3 h-3" />
+            <span className="hidden sm:inline">Gestures</span>
+          </button>
+
           {onToggleMouseSimulation && (
             <button
               onClick={onToggleMouseSimulation}

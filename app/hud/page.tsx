@@ -1,15 +1,15 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import EyeTracker from '@/components/vision/EyeTracker';
 import RadialHUD from '@/components/hud/RadialHUD';
 import FloorBeacon from '@/components/hud/FloorBeacon';
-import { GazeCoords, QuadrantOption, ToneType } from '@/lib/types';
-import { SpeechService } from '@/lib/audio/speechService';
-import { Eye, Volume2, ShieldAlert, Zap, Sliders, ExternalLink, Minimize2, ArrowLeft } from 'lucide-react';
+import { GazeCoords, QuadrantOption, ToneType, GestureType, VoiceProfile } from '@/lib/types';
+import { SpeechService, DEFAULT_VOICE_PROFILE } from '@/lib/audio/speechService';
+import { Eye, Volume2, ShieldAlert, Zap, Sliders, ExternalLink, Minimize2, ArrowLeft, Radio } from 'lucide-react';
 import Link from 'next/link';
 
-const HUD_OPTIONS: QuadrantOption[] = [
+const DEFAULT_HUD_OPTIONS: QuadrantOption[] = [
   {
     id: 'hud-0',
     quadrant: 0,
@@ -49,6 +49,7 @@ const HUD_OPTIONS: QuadrantOption[] = [
 ];
 
 export default function FloatingHUDPage() {
+  const [options, setOptions] = useState<QuadrantOption[]>(DEFAULT_HUD_OPTIONS);
   const [activeQuadrant, setActiveQuadrant] = useState<number | null>(null);
   const [isProlongedBlink, setIsProlongedBlink] = useState(false);
   const [isFloorReserved, setIsFloorReserved] = useState(false);
@@ -56,25 +57,143 @@ export default function FloatingHUDPage() {
   const [speakingText, setSpeakingText] = useState('');
   const [tone, setTone] = useState<ToneType>('professional');
   const [isSimulatingMouse, setIsSimulatingMouse] = useState(false);
+  const [profile, setProfile] = useState<VoiceProfile>(DEFAULT_VOICE_PROFILE);
+  const [isSyncedWithCockpit, setIsSyncedWithCockpit] = useState(false);
+
+  const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+
+  // Initialize Voice Profile and Cross-Window Bus
+  useEffect(() => {
+    const saved = SpeechService.loadSavedVoiceProfile();
+    setProfile(saved);
+
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      const channel = new BroadcastChannel('synapseflow_bus');
+      broadcastChannelRef.current = channel;
+
+      channel.onmessage = (event) => {
+        const data = event.data;
+        if (!data) return;
+
+        if (data.type === 'SYNC_STATE' || data.type === 'OPTIONS_UPDATE') {
+          if (Array.isArray(data.options) && data.options.length === 4) {
+            setOptions(data.options);
+          }
+          if (data.tone) setTone(data.tone);
+          if (data.profile) setProfile(data.profile);
+          setIsSyncedWithCockpit(true);
+        } else if (data.type === 'TONE_UPDATE') {
+          if (data.tone) setTone(data.tone);
+        } else if (data.type === 'PROFILE_UPDATE') {
+          if (data.profile) setProfile(data.profile);
+        }
+      };
+
+      // Request current state from main cockpit
+      channel.postMessage({ type: 'REQUEST_SYNC' });
+
+      return () => {
+        channel.close();
+      };
+    }
+  }, []);
 
   const handleGazeUpdate = useCallback((coords: GazeCoords, quadrant: 0 | 1 | 2 | 3 | null) => {
     setActiveQuadrant(quadrant);
     setIsProlongedBlink(coords.isProlongedBlink);
   }, []);
 
+  // Multi-modal gesture handling in floating HUD
+  const handleGesture = useCallback(
+    (gesture: GestureType) => {
+      if (gesture === 'browRaise') {
+        setIsFloorReserved(true);
+        SpeechService.playGestureChime('brow');
+        broadcastChannelRef.current?.postMessage({
+          type: 'FLOOR_RESERVE',
+          isReserved: true,
+        });
+      } else if (gesture === 'nod') {
+        SpeechService.playGestureChime('nod');
+        // Quick Affirmation
+        const affirmText = "Yes, exactly, I completely agree.";
+        setIsSpeaking(true);
+        setSpeakingText(affirmText);
+        SpeechService.speakText(affirmText, tone, () => {
+          setIsSpeaking(false);
+          setSpeakingText('');
+        }, profile);
+        broadcastChannelRef.current?.postMessage({
+          type: 'SPOKEN_PHRASE',
+          text: affirmText,
+        });
+      } else if (gesture === 'shake') {
+        SpeechService.playGestureChime('shake');
+        setIsFloorReserved(false);
+        setActiveQuadrant(null);
+        broadcastChannelRef.current?.postMessage({
+          type: 'FLOOR_RESERVE',
+          isReserved: false,
+        });
+      }
+    },
+    [tone, profile]
+  );
+
   const handleSelectOption = useCallback(
     async (option: QuadrantOption) => {
       setIsFloorReserved(false);
       setIsSpeaking(true);
-      const text = option.previewText || option.intentToken;
-      setSpeakingText(text);
+      const fallback = option.previewText || option.intentToken;
+      setSpeakingText(fallback);
 
-      SpeechService.speakText(text, tone, () => {
-        setIsSpeaking(false);
-        setSpeakingText('');
-      });
+      try {
+        const res = await fetch('/api/expand-intent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            intentToken: option.intentToken,
+            category: option.category,
+            tone,
+            userName: profile.userName,
+            userRole: profile.role,
+            techStack: profile.techStack,
+          }),
+        });
+
+        const data = await res.json();
+        const speechOutput = data.expandedSpeech || fallback;
+
+        setSpeakingText(speechOutput);
+        SpeechService.speakText(
+          speechOutput,
+          tone,
+          () => {
+            setIsSpeaking(false);
+            setSpeakingText('');
+          },
+          profile
+        );
+
+        // Notify main cockpit of spoken phrase
+        broadcastChannelRef.current?.postMessage({
+          type: 'SPOKEN_PHRASE',
+          text: speechOutput,
+        });
+      } catch (err) {
+        console.warn('HUD intent expand fallback:', err);
+        SpeechService.speakText(
+          fallback,
+          tone,
+          () => {
+            setIsSpeaking(false);
+            setSpeakingText('');
+          },
+          profile
+        );
+      }
     },
-    [tone]
+    [tone, profile]
   );
 
   return (
@@ -84,7 +203,7 @@ export default function FloatingHUDPage() {
         isFloorReserved={isFloorReserved}
         isSpeaking={isSpeaking}
         speakingText={speakingText}
-        userName="Alex Rivera"
+        userName={profile.userName}
       />
 
       {/* Mini Titlebar */}
@@ -100,6 +219,11 @@ export default function FloatingHUDPage() {
           <span className="font-bold text-white flex items-center gap-1.5">
             <Zap className="w-3.5 h-3.5 text-cyan-400" /> SynapseFlow Floating HUD
           </span>
+          {isSyncedWithCockpit && (
+            <span className="text-[9px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-1.5 py-0.2 rounded font-mono flex items-center gap-1">
+              <Radio className="w-2.5 h-2.5 animate-pulse" /> SYNCED
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -119,10 +243,13 @@ export default function FloatingHUDPage() {
       {/* Compact HUD Centerpiece */}
       <div className="flex-1 flex items-center justify-center py-4">
         <RadialHUD
-          options={HUD_OPTIONS}
+          options={options}
           activeQuadrant={activeQuadrant}
           tone={tone}
-          onToneChange={setTone}
+          onToneChange={(newTone) => {
+            setTone(newTone);
+            broadcastChannelRef.current?.postMessage({ type: 'TONE_UPDATE', tone: newTone });
+          }}
           onSelectOption={handleSelectOption}
           onFloorReserveChange={setIsFloorReserved}
           dwellDurationMs={350}
@@ -135,6 +262,7 @@ export default function FloatingHUDPage() {
         <EyeTracker
           onGazeUpdate={handleGazeUpdate}
           onProlongedBlink={() => setIsProlongedBlink(true)}
+          onGesture={handleGesture}
           isSimulatingMouse={isSimulatingMouse}
           onToggleMouseSimulation={() => setIsSimulatingMouse(!isSimulatingMouse)}
         />

@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { QuadrantOption } from '@/lib/types';
-import { Layers, Sparkles, Check, Plus, Edit2, RotateCcw } from 'lucide-react';
+import { Layers, Sparkles, Check, Plus, Edit2, RotateCcw, Save } from 'lucide-react';
 
 export interface PresetPack {
   id: string;
@@ -143,15 +143,35 @@ export const PRESET_PACKS: PresetPack[] = [
   },
 ];
 
+const MACRO_PACKS_STORAGE_KEY = 'synapseflow_macro_packs_v1';
+
 interface Props {
   activeOptions: QuadrantOption[];
   onApplyPack: (options: QuadrantOption[]) => void;
 }
 
 export default function MacroStudio({ activeOptions, onApplyPack }: Props) {
+  const [packs, setPacks] = useState<PresetPack[]>(PRESET_PACKS);
   const [selectedPackId, setSelectedPackId] = useState<string>('standup');
   const [customOptions, setCustomOptions] = useState<QuadrantOption[]>(activeOptions);
   const [editingQuadrant, setEditingQuadrant] = useState<number | null>(null);
+  const [saveToast, setSaveToast] = useState(false);
+
+  // Load custom packs from localStorage on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const stored = localStorage.getItem(MACRO_PACKS_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setPacks(parsed);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load macro packs from localStorage:', e);
+    }
+  }, []);
 
   const handleSelectPack = (pack: PresetPack) => {
     setSelectedPackId(pack.id);
@@ -165,7 +185,33 @@ export default function MacroStudio({ activeOptions, onApplyPack }: Props) {
     );
     setCustomOptions(updated);
     onApplyPack(updated);
+
+    // Save updated pack into packs list and localStorage
+    const updatedPacks = packs.map((p) =>
+      p.id === selectedPackId ? { ...p, options: updated } : p
+    );
+    setPacks(updatedPacks);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(MACRO_PACKS_STORAGE_KEY, JSON.stringify(updatedPacks));
+      } catch (e) {
+        console.warn('Failed to save updated packs:', e);
+      }
+    }
+
     setEditingQuadrant(null);
+    setSaveToast(true);
+    setTimeout(() => setSaveToast(false), 2000);
+  };
+
+  const handleResetDefaults = () => {
+    setPacks(PRESET_PACKS);
+    setSelectedPackId('standup');
+    setCustomOptions(PRESET_PACKS[0].options);
+    onApplyPack(PRESET_PACKS[0].options);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(MACRO_PACKS_STORAGE_KEY);
+    }
   };
 
   return (
@@ -180,11 +226,27 @@ export default function MacroStudio({ activeOptions, onApplyPack }: Props) {
             Instantly switch or customize your 4-quadrant response wheels for different meeting types.
           </p>
         </div>
+
+        <div className="flex items-center gap-2">
+          {saveToast && (
+            <span className="text-[11px] text-emerald-400 font-semibold animate-in fade-in duration-150">
+              ✓ Saved to Wheel!
+            </span>
+          )}
+          <button
+            onClick={handleResetDefaults}
+            className="py-1.5 px-3 rounded-xl border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-xs font-medium text-neutral-300 hover:text-white transition flex items-center gap-1.5"
+            title="Reset preset packs to original defaults"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Reset Packs</span>
+          </button>
+        </div>
       </div>
 
       {/* Preset Packs Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {PRESET_PACKS.map((pack) => {
+        {packs.map((pack) => {
           const isSelected = selectedPackId === pack.id;
           return (
             <div
@@ -200,7 +262,9 @@ export default function MacroStudio({ activeOptions, onApplyPack }: Props) {
                 <span className="text-xs font-bold text-white">{pack.name}</span>
                 {isSelected && <Check className="w-4 h-4 text-cyan-400" />}
               </div>
-              <p className="text-[11px] text-neutral-400 leading-relaxed line-clamp-2">{pack.description}</p>
+              <p className="text-[11px] text-neutral-400 leading-relaxed line-clamp-2">
+                {pack.description}
+              </p>
             </div>
           );
         })}
@@ -208,9 +272,14 @@ export default function MacroStudio({ activeOptions, onApplyPack }: Props) {
 
       {/* Active Wheel Editor */}
       <div className="space-y-3 pt-2">
-        <h4 className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">
-          Active Wheel Layout (Click to edit any quadrant):
-        </h4>
+        <div className="flex items-center justify-between">
+          <h4 className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">
+            Active Wheel Layout (Click to edit any quadrant):
+          </h4>
+          <span className="text-[10px] text-neutral-500 font-mono">
+            Automatically applies to Gaze Cockpit & Floating HUD
+          </span>
+        </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {customOptions.map((opt) => (

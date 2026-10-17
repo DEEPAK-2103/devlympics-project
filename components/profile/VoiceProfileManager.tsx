@@ -1,50 +1,56 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { ToneType } from '@/lib/types';
-import { SpeechService } from '@/lib/audio/speechService';
+import { ToneType, VoiceProfile } from '@/lib/types';
+import { SpeechService, DEFAULT_VOICE_PROFILE } from '@/lib/audio/speechService';
 import { User, Volume2, Sparkles, Sliders, CheckCircle2, Mic, Play } from 'lucide-react';
 
 interface Props {
   tone: ToneType;
   onToneChange: (tone: ToneType) => void;
+  onProfileChange?: (profile: VoiceProfile) => void;
 }
 
-export default function VoiceProfileManager({ tone, onToneChange }: Props) {
-  const [userName, setUserName] = useState('Alex Rivera');
-  const [role, setRole] = useState('Staff Distributed Systems Architect');
-  const [techStack, setTechStack] = useState('Distributed Systems, TypeScript, Go, Redis');
-  const [selectedVoice, setSelectedVoice] = useState<string>('');
+export default function VoiceProfileManager({ tone, onToneChange, onProfileChange }: Props) {
+  const [profile, setProfile] = useState<VoiceProfile>(DEFAULT_VOICE_PROFILE);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [speechPitch, setSpeechPitch] = useState(1.0);
-  const [speechRate, setSpeechRate] = useState(1.0);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // Load saved profile on mount
+  useEffect(() => {
+    const saved = SpeechService.loadSavedVoiceProfile();
+    setProfile(saved);
+  }, []);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       const updateVoices = () => {
         const v = window.speechSynthesis.getVoices().filter((voice) => voice.lang.startsWith('en'));
         setAvailableVoices(v);
-        if (v.length > 0 && !selectedVoice) {
-          setSelectedVoice(v[0].name);
+        if (v.length > 0 && !profile.selectedVoice) {
+          setProfile((prev) => ({ ...prev, selectedVoice: v[0].name }));
         }
       };
 
       updateVoices();
       window.speechSynthesis.onvoiceschanged = updateVoices;
     }
-  }, [selectedVoice]);
+  }, [profile.selectedVoice]);
 
   const handleTestVoice = () => {
     SpeechService.speakText(
-      `Hello team, this is ${userName}, ${role}. SynapseFlow is active and tracking my gaze.`,
-      tone
+      `Hello team, this is ${profile.userName}, ${profile.role}. SynapseFlow is active and tracking my gaze.`,
+      tone,
+      undefined,
+      profile
     );
   };
 
   const handleSave = () => {
+    SpeechService.saveVoiceProfile(profile);
+    onProfileChange?.(profile);
     setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 2000);
+    setTimeout(() => setSavedSuccess(false), 2500);
   };
 
   return (
@@ -81,8 +87,8 @@ export default function VoiceProfileManager({ tone, onToneChange }: Props) {
             </label>
             <input
               type="text"
-              value={userName}
-              onChange={(e) => setUserName(e.target.value)}
+              value={profile.userName}
+              onChange={(e) => setProfile((p) => ({ ...p, userName: e.target.value }))}
               className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-purple-400 font-semibold"
             />
           </div>
@@ -93,8 +99,8 @@ export default function VoiceProfileManager({ tone, onToneChange }: Props) {
             </label>
             <input
               type="text"
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
+              value={profile.role}
+              onChange={(e) => setProfile((p) => ({ ...p, role: e.target.value }))}
               className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-purple-400 font-medium"
             />
           </div>
@@ -105,8 +111,8 @@ export default function VoiceProfileManager({ tone, onToneChange }: Props) {
             </label>
             <input
               type="text"
-              value={techStack}
-              onChange={(e) => setTechStack(e.target.value)}
+              value={profile.techStack}
+              onChange={(e) => setProfile((p) => ({ ...p, techStack: e.target.value }))}
               className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-purple-400 font-mono text-[11px]"
             />
             <p className="text-[10px] text-neutral-500 mt-1">
@@ -143,8 +149,8 @@ export default function VoiceProfileManager({ tone, onToneChange }: Props) {
               Synthetic Speech Engine Voice
             </label>
             <select
-              value={selectedVoice}
-              onChange={(e) => setSelectedVoice(e.target.value)}
+              value={profile.selectedVoice}
+              onChange={(e) => setProfile((p) => ({ ...p, selectedVoice: e.target.value }))}
               className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-purple-400"
             >
               {availableVoices.length === 0 ? (
@@ -163,15 +169,15 @@ export default function VoiceProfileManager({ tone, onToneChange }: Props) {
             <div>
               <div className="flex justify-between text-[11px] text-neutral-400 mb-1">
                 <span>Vocal Pitch</span>
-                <span className="font-mono text-purple-400 font-bold">{speechPitch.toFixed(2)}</span>
+                <span className="font-mono text-purple-400 font-bold">{profile.speechPitch.toFixed(2)}</span>
               </div>
               <input
                 type="range"
                 min="0.8"
                 max="1.2"
                 step="0.05"
-                value={speechPitch}
-                onChange={(e) => setSpeechPitch(Number(e.target.value))}
+                value={profile.speechPitch}
+                onChange={(e) => setProfile((p) => ({ ...p, speechPitch: Number(e.target.value) }))}
                 className="w-full accent-purple-500 cursor-pointer"
               />
             </div>
@@ -179,15 +185,15 @@ export default function VoiceProfileManager({ tone, onToneChange }: Props) {
             <div>
               <div className="flex justify-between text-[11px] text-neutral-400 mb-1">
                 <span>Speech Speed</span>
-                <span className="font-mono text-purple-400 font-bold">{speechRate.toFixed(2)}x</span>
+                <span className="font-mono text-purple-400 font-bold">{profile.speechRate.toFixed(2)}x</span>
               </div>
               <input
                 type="range"
                 min="0.8"
                 max="1.3"
                 step="0.05"
-                value={speechRate}
-                onChange={(e) => setSpeechRate(Number(e.target.value))}
+                value={profile.speechRate}
+                onChange={(e) => setProfile((p) => ({ ...p, speechRate: Number(e.target.value) }))}
                 className="w-full accent-purple-500 cursor-pointer"
               />
             </div>
@@ -198,12 +204,12 @@ export default function VoiceProfileManager({ tone, onToneChange }: Props) {
       <div className="pt-2 flex justify-end">
         <button
           onClick={handleSave}
-          className="py-2 px-6 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-lg shadow-purple-600/20 transition flex items-center gap-1.5"
+          className="py-2.5 px-6 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-lg shadow-purple-600/20 transition flex items-center gap-1.5"
         >
           {savedSuccess ? (
             <>
               <CheckCircle2 className="w-4 h-4 text-emerald-300" />
-              <span>Profile Calibrated & Saved!</span>
+              <span>Profile Calibrated & Persisted!</span>
             </>
           ) : (
             <span>Save Profile Preferences</span>
